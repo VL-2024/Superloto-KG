@@ -1,0 +1,339 @@
+onst d = 56 + (t.edgeDist - 56) * eased;
+      kh.x = BOARD.cx + t.dirX * d;
+      kh.y = BOARD.cy + t.dirY * d;
+      kh.angle = t.baseAngle + Math.sin(pr * Math.PI * 1.2) * 0.22;
+      kh.rimGlow = pr;
+      kh.vx = 0; kh.vy = 0; kh.angV = 0;
+      if (pr > 0.3 && !t.hit1) {
+        t.hit1 = true; spawnRipple(kh.x, kh.y, true); playImpact(true);
+      }
+      if (pr >= 1) t.state = 'teeter';
+      return;
+    }
+    if (t.state === 'teeter') {
+      const pr = Math.min(1, (now - t.approachEnd) / (t.teeterEnd - t.approachEnd));
+      const wob = Math.sin(pr * Math.PI * 8) * (1 - pr) * 14;
+      const outward = Math.sin(pr * Math.PI * 0.9) * 4;
+      const d = t.edgeDist - 1 + outward;
+      kh.x = BOARD.cx + t.dirX * d - t.dirY * wob * 0.15;
+      kh.y = BOARD.cy + t.dirY * d + t.dirX * wob * 0.15;
+      kh.angle = t.baseAngle + Math.sin(pr * Math.PI * 8) * 0.22 + pr * 0.18;
+      kh.rimGlow = 1;
+      kh.vx = 0; kh.vy = 0; kh.angV = 0;
+      if (pr > 0.44 && !t.sparked) {
+        t.sparked = true; spawnParticles(kh.x, kh.y, true, 12); spawnRipple(kh.x, kh.y, true);
+      }
+      if (pr >= 1) {
+        t.state = 'push'; showToast('ХАН!', true);
+      }
+      return;
+    }
+    if (t.state === 'push') {
+      const pr = Math.min(1, (now - t.teeterEnd) / (t.pushEnd - t.teeterEnd));
+      const d = (t.edgeDist - 1) + pr * 34;
+      kh.x = BOARD.cx + t.dirX * d;
+      kh.y = BOARD.cy + t.dirY * d;
+      kh.angle = t.baseAngle + 0.22 + pr * 0.4;
+      kh.rimGlow = 1 - pr * 0.18;
+      if (pr > 0.2 && !t.bump2) {
+        t.bump2 = true; spawnRipple(kh.x, kh.y, true); playImpact(true);
+      }
+      if (pr >= 1) {
+        kh.teeter = null;
+        kh.x = BOARD.cx + t.dirX * (BOARD.innerR + 46);
+        kh.y = BOARD.cy + t.dirY * (BOARD.innerR + 46);
+        markOut(kh, true);
+      }
+    }
+  }
+
+  function collide(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.hypot(dx, dy) || 0.0001;
+    const minD = a.r + b.r;
+    if (d >= minD) return false;
+
+    const nx = dx / d, ny = dy / d;
+    const overlap = minD - d;
+    const tm = a.mass + b.mass;
+
+    a.x -= nx * overlap * (b.mass / tm);
+    a.y -= ny * overlap * (b.mass / tm);
+    b.x += nx * overlap * (a.mass / tm);
+    b.y += ny * overlap * (a.mass / tm);
+
+    const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+    const vn = rvx * nx + rvy * ny;
+    if (vn > 0) return true;
+
+    const e = 0.82;
+    let j = -(1 + e) * vn;
+    j /= (1 / a.mass) + (1 / b.mass);
+
+    const ix = j * nx, iy = j * ny;
+    a.vx -= ix / a.mass; a.vy -= iy / a.mass;
+    b.vx += ix / b.mass; b.vy += iy / b.mass;
+    a.angV += rand(-0.025, 0.025);
+    b.angV += rand(-0.025, 0.025);
+
+    if (Math.abs(vn) > 2.6 && Math.random() < 0.18) {
+      spawnRipple((a.x + b.x) / 2, (a.y + b.y) / 2, false);
+      playImpact(false);
+    }
+    return true;
+  }
+
+  function finalizeResult() {
+    if (resultShown) return;
+
+    resultShown = true;
+
+    // LMS response is authoritative. Balance changes visually only after reveal finishes.
+    if (pendingBalance != null && Number.isFinite(pendingBalance)) {
+      balance = pendingBalance;
+
+      if (gameMode === 'demo') {
+        demoBalance = pendingBalance;
+      } else {
+        realBalance = pendingBalance;
+      }
+    }
+
+    if (serverWin > 0) {
+      showWinBubble(serverWin, khanOut);
+      spawnConfetti();
+      scorePulse = 1;
+      playWin(khanOut);
+    } else {
+      winBubble.show = false;
+      scorePulse = 1;
+    }
+
+    if (window.X2LMS) {
+      window.X2LMS.emit('X2_GAME_ROUND_COMPLETE', {
+        gameId: GAME_ID,
+        ticketId: ticket?.ticketId || null,
+        scenario: scenario?.id || null,
+        win: serverWin,
+        balance,
+        denomination: stake,
+        currency,
+        currencyDisplay,
+        language,
+        mode: gameMode
+      });
+    }
+  }
+
+  function beginShot(ux, uy, pwr) {
+    if (state !== 'ready' || !ticket || !scenario) return;
+
+    // Scenario is received from LMS. Visual randomness affects trajectory only,
+    // never the number of winning pieces or the monetary result.
+    chooseTargets();
+
+    const ex = BOARD.cx + ux * 94;
+    const ey = BOARD.cy + uy * 88;
+
+    flight = {
+      t0: performance.now(),
+      dur: 900 + pwr * 180,
+      sx: saka.x, sy: saka.y,
+      c1x: saka.x + ux * 28, c1y: saka.y - 68 - pwr * 10,
+      c2x: (saka.x + ex) / 2 + ux * 42, c2y: Math.min(saka.y, ey) - 160 - pwr * 24,
+      ex, ey, ux, uy, pwr
+    };
+
+    state = 'flight';
+    roundStartedAt = performance.now();
+    finalizeAt = roundStartedAt + 5000;
+    showToast(pwr > 0.8 ? tr('strongThrow') : tr('aimedThrow'), false);
+    playShot();
+  }
+
+  function throwByButton() {
+    if (state !== 'ready') return;
+    // Slightly different trajectory every time, but always toward the field.
+    const side = rand(-0.16, 0.16);
+    const ux = Math.sin(side);
+    const uy = -Math.cos(side);
+    const pwr = rand(0.80, 0.97);
+    beginShot(ux, uy, pwr);
+  }
+
+  function selectorInteractive() {
+    return state === 'idle' || state === 'settled';
+  }
+
+  function hitBoxPoint(p, box) {
+    return p.x >= box.x - box.w/2 && p.x <= box.x + box.w/2 &&
+           p.y >= box.y - box.h/2 && p.y <= box.y + box.h/2;
+  }
+
+  function handleSelectorPointer(p) {
+    if (!selectorInteractive()) return false;
+
+    if (hitBoxPoint(p, STAKE_SELECT)) {
+      selectorOpen = selectorOpen === 'stake' ? null : 'stake';
+      return true;
+    }
+
+    if (selectorOpen === 'stake') {
+      const list = currentDenominations();
+      const x = 684, w = 207, rowH = 50, top = 105;
+      for (let i = 0; i < list.length; i++) {
+        const box = {x: x + w/2, y: top + rowH*i + rowH/2, w, h:rowH};
+        if (hitBoxPoint(p, box)) {
+          selectDenomination(list[i]);
+          return true;
+        }
+      }
+      selectorOpen = null;
+      return true;
+    }
+
+    return false;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    ensureAudio();
+    const p = pointFromEvent(e);
+
+    if (hitBoxPoint(p, DEPOSIT_BUTTON)) {
+      requestDeposit();
+      return;
+    }
+
+    if (
+      demoAllowed &&
+      hitBoxPoint(p, MODE_SWITCH) &&
+      (state === 'idle' || state === 'settled')
+    ) {
+      setGameMode(gameMode === 'real' ? 'demo' : 'real');
+      return;
+    }
+
+    if (handleSelectorPointer(p)) return;
+
+    if (hitRect(p, BTN)) {
+      if (state === 'ready') {
+        throwByButton();
+      } else if (state === 'idle' || state === 'settled') {
+        requestNewGame();
+      } else if (state === 'error') {
+        initializeLms();
+      }
+      return;
+    }
+    if (!assetsReady || state !== 'ready') return;
+    if (Math.hypot(p.x - saka.x, p.y - saka.y) <= saka.r + 25) {
+      pointerId = e.pointerId;
+      canvas.setPointerCapture(pointerId);
+      dragPoint = p;
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pointerId || !dragPoint || state !== 'ready') return;
+    const p = pointFromEvent(e);
+    const dx = p.x - SAKA_START.x;
+    const dy = p.y - SAKA_START.y;
+    const maxLen = 100;
+    const len = Math.min(maxLen, Math.hypot(dx, dy));
+    const ang = Math.atan2(dy, dx);
+
+    let x = SAKA_START.x + Math.cos(ang) * len;
+    let y = SAKA_START.y + Math.sin(ang) * len;
+    y = Math.min(y, 1085);
+    y = Math.max(y, 980);
+    x = Math.max(190, Math.min(750, x));
+
+    saka.x = x;
+    saka.y = y;
+    saka.angle = dx * 0.0042;
+    dragPoint = { x, y };
+  });
+
+  function releaseShot(e) {
+    if (e.pointerId !== pointerId || !dragPoint || state !== 'ready') return;
+    const dx = dragPoint.x - SAKA_START.x;
+    const dy = dragPoint.y - SAKA_START.y;
+    const len = Math.hypot(dx, dy);
+    pointerId = null;
+    dragPoint = null;
+
+    if (len < 10) {
+      saka.x = SAKA_START.x;
+      saka.y = SAKA_START.y;
+      return;
+    }
+
+    const ux = -dx / len, uy = -dy / len;
+    const pwr = Math.min(1, len / 100);
+    beginShot(ux, uy, pwr);
+  }
+  canvas.addEventListener('pointerup', releaseShot);
+  canvas.addEventListener('pointercancel', releaseShot);
+
+  function startRoll() {
+    const speed = 8.8 + flight.pwr * 14.5;
+    saka.x = flight.ex; saka.y = flight.ey;
+    saka.vx = flight.ux * speed; saka.vy = flight.uy * speed;
+    saka.angV = (flight.ux > 0 ? 1 : -1) * (0.07 + flight.pwr * 0.03);
+    state = 'roll';
+    spawnParticles(saka.x, saka.y, false, 10);
+    spawnRipple(saka.x, saka.y, false);
+  }
+
+  function step(dt, now) {
+    if (!assetsReady) return;
+
+    spin += dt * 0.002;
+    scorePulse = Math.max(0, scorePulse - dt * 0.002);
+
+    if (state === 'flight' && flight) {
+      const raw = Math.min(1, (now - flight.t0) / flight.dur);
+      const t = easeOutCubic(raw);
+
+      saka.x = cubicPoint(t, flight.sx, flight.c1x, flight.c2x, flight.ex);
+      saka.y = cubicPoint(t, flight.sy, flight.c1y, flight.c2y, flight.ey);
+      saka.lift = Math.sin(raw * Math.PI) * (42 + flight.pwr * 24);
+      saka.shadowStretch = 1 + Math.sin(raw * Math.PI) * 0.36;
+      saka.angle += 0.095 + flight.pwr * 0.035;
+
+      if (raw >= 1) startRoll();
+      return;
+    }
+
+    if (state !== 'roll') return;
+
+    // One-shot target ejection starts after SAKA has hit the group.
+    if (now > flight.t0 + 980 && !scenario.launched) {
+      launchTargets(now);
+    }
+
+    if (now > flight.t0 + 1540) {
+      startKhanDrama(now);
+    }
+
+    // Update the one and only animation for each winning chuko.
+    updateTargetEjections(now);
+
+    // Safety only speeds up existing animations; it never launches a second flight.
+    if (now > roundStartedAt + 3000 && !scenario.targets.every(p => p.out)) {
+      forceTargetsOut(now);
+    }
+
+    // Physics excludes a winning chuko from the moment its eject animation starts.
+    const activeMovers = [
+      saka,
+      ...pieces.filter(p => {
+        if (p.out) return false;
+        if (p.type === 'khan' && p.teeter) return false;
+        if (p.type === 'bone' && p.targetWin && p.ejectAnim && p.ejectAnim.started) return false;
+        return true;
+      })
+    ];
+
+    for (const p of activeMovers) {
+      p.x += p.vx * dt * 0.06;
