@@ -1,0 +1,60 @@
+  khanImgs = rawKhan.map(i => padImage(i, 0.20));
+      sakaImgs = rawSaka.map(i => padImage(i, 0.20));
+      assetsReady = true;
+      resize();
+      resetRound();
+      requestAnimationFrame(render);
+      initializeLms();
+    }
+    for (const im of allRaw) {
+      if (im.complete) onLoad();
+      else im.onload = onLoad;
+    }
+  }
+
+  function render(now=0) {
+    const dt = lastTime ? Math.min(40, now - lastTime) : 16;
+    lastTime = now;
+
+    step(dt, now);
+
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+    drawTrail();
+    drawAimGuide();
+    drawPieces();
+    drawRipples(dt);
+    drawParticles(dt);
+    drawConfetti(dt);
+    drawHud();
+
+    requestAnimationFrame(render);
+  }
+
+  window.addEventListener('resize', resize);
+  window.X2Chuko = {
+    getState: () => ({
+      state,
+      gameId: GAME_ID,
+      ticketId: ticket?.ticketId || null,
+      scenario: scenario?.id || null,
+      balance,
+      denomination: stake,
+      denominations: currentDenominations(),
+      currency,
+      currencyDisplay,
+      language,
+      mode: gameMode,
+      demoAllowed,
+      demoBalance,
+      win: serverWin
+    }),
+    reloadBalance: initializeLms
+  };
+
+  resize();
+  bootWhenReady();
+})();
+</script>
+</body>
+</html>
