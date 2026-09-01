@@ -1,0 +1,337 @@
+.currency || 'KGS').toUpperCase();
+
+    if (cfg.mock) {
+      await new Promise(r => setTimeout(r, 220));
+      if (!(cur in mockBalances)) mockBalances[cur] = 1000;
+
+      return {
+        balance:mockBalances[cur],
+        currency:cur,
+        currencyDisplay:cfg.currencyDisplay || cur
+      };
+    }
+
+    const sep = cfg.endpoints.balance.includes('?') ? '&' : '?';
+    const path = cfg.endpoints.balance + sep + 'currency=' + encodeURIComponent(cur);
+
+    const data = await apiRequest(path, {method:'GET'});
+    return normalizeBalance(data, cur);
+  }
+
+  async function createTicket({gameId, denomination, currency, language}) {
+    const requestId =
+      global.crypto && global.crypto.randomUUID
+        ? global.crypto.randomUUID()
+        : String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+
+    const cur = String(currency || cfg.currency || 'KGS').toUpperCase();
+    const lang = String(language || cfg.language || 'RU').toUpperCase();
+
+    if (cfg.mock) {
+      await new Promise(r => setTimeout(r, 320));
+
+      const forced = Number(params.get('scenario'));
+      const scenario = [1,2,3,4,5].includes(forced)
+        ? forced
+        : ((mockCounter++ % 5) + 1);
+
+      const mockMultipliers = {1:0,2:1,3:2,4:10,5:50};
+      const multiplier = mockMultipliers[scenario];
+      const win = Number(denomination) * multiplier;
+
+      if (!(cur in mockBalances)) mockBalances[cur] = 1000;
+
+      if (mockBalances[cur] < Number(denomination)) {
+        throw makeError('INSUFFICIENT_FUNDS', 'Insufficient mock balance', 409);
+      }
+
+      mockBalances[cur] = mockBalances[cur] - Number(denomination) + win;
+
+      return {
+        ticketId:'MOCK-' + Date.now(),
+        scenario,
+        win,
+        balance:mockBalances[cur],
+        denomination:Number(denomination),
+        currency:cur,
+        currencyDisplay:cfg.currencyDisplay || cur,
+        language:lang,
+        multiplier
+      };
+    }
+
+    const data = await apiRequest(cfg.endpoints.newGame, {
+      method:'POST',
+      headers:{'Idempotency-Key':requestId},
+      body:JSON.stringify({
+        requestId,
+        gameId,
+        denomination:Number(denomination),
+        currency:cur,
+        language:lang
+      })
+    });
+
+    return normalizeTicket(data, {
+      gameId,
+      denomination,
+      currency:cur,
+      currencyDisplay:cfg.currencyDisplay,
+      language:lang
+    });
+  }
+
+  async function createDemoTicket({gameId, denomination, currency, currencyDisplay, language, demoBalance}) {
+    await new Promise(r => setTimeout(r, 220));
+
+    const forced = Number(params.get('scenario'));
+    const scenario = [1,2,3,4,5].includes(forced)
+      ? forced
+      : ((mockCounter++ % 5) + 1);
+
+    // QA-only demo payout mapping.
+    const demoMultipliers = {1:0, 2:1, 3:2, 4:10, 5:50};
+    const multiplier = demoMultipliers[scenario];
+    const win = Number(denomination) * multiplier;
+
+    const startBalance = Number(demoBalance || cfg.demoBalance || 10000);
+    const nextBalance = startBalance - Number(denomination) + win;
+
+    return {
+      ticketId: 'DEMO-' + Date.now(),
+      scenario,
+      win,
+      balance: nextBalance,
+      denomination: Number(denomination),
+      currency: String(currency || cfg.currency || 'KGS').toUpperCase(),
+      currencyDisplay: currencyDisplay || cfg.currencyDisplay || currency || '',
+      language: String(language || cfg.language || 'RU').toUpperCase(),
+      multiplier,
+      demo: true
+    };
+  }
+
+
+  global.X2LMS = {
+    getGameSettings,
+    getBalance,
+    createTicket,
+    createDemoTicket,
+    emit,
+    getSession:() => session
+  };
+
+  setTimeout(() => {
+    emit('X2_GAME_READY', {
+      gameId:params.get('gameId') || cfg.gameId || 'CHUKO',
+      needsInit:!cfg.mock && cfg.initMode === 'postMessage',
+      needsSession:!cfg.mock && cfg.sessionMode === 'postMessage'
+    });
+  }, 0);
+})(window);
+
+</script>
+<script>
+(() => {
+  const BG_SRC = 'assets/background.webp';
+  const CHUKO_SRCS = ['assets/chuko_01.webp','assets/chuko_02.webp','assets/chuko_03.webp','assets/chuko_04.webp','assets/chuko_05.webp','assets/chuko_06.webp'];
+  const KHAN_SRCS = ['assets/khan_01.webp','assets/khan_02.webp','assets/khan_03.webp','assets/khan_04.webp','assets/khan_05.webp','assets/khan_06.webp'];
+  const SAKA_SRCS = ['assets/saka_01.webp','assets/saka_02.webp','assets/saka_03.webp','assets/saka_04.webp','assets/saka_05.webp','assets/saka_06.webp'];
+
+  const DESIGN_W = 941, DESIGN_H = 1672;
+  const BOARD = { cx: 470.5, cy: 684, innerR: 220 };
+  const SAKA_START = { x: 470.5, y: 1048 };
+  const BTN = { x: 470.5, y: 1436, w: 505, h: 94 };
+  const SCORE_Y = 1288;
+  const SCORE_CELLS = [
+    { x: 183, w: 228, label: 'ВЫБИТО' },
+    { x: 470.5, w: 236, label: 'МНОЖИТЕЛЬ' },
+    { x: 758, w: 228, label: 'ХАН' }
+  ];
+
+  // Only cover the old score/button remnants. Never cover SAKA or the win table.
+  const CLEAN_SCORE = { x: 56, y: 1215, w: 829, h: 142 };
+  const CLEAN_BUTTON = { x: 205, y: 1372, w: 531, h: 130 };
+  const STAKE_SELECT = { x: 782, y: 58, w: 235, h: 82 };
+
+  // Existing "+" button next to the balance.
+  const DEPOSIT_BUTTON = { x: 636, y: 78, w: 72, h: 72 };
+
+  // Shown only when LMS explicitly allows demo switching.
+  const MODE_SWITCH = { x: 470.5, y: 350, w: 216, h: 46 };
+
+  const canvas = document.getElementById('c');
+  const stage = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+
+  let DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  let W = DESIGN_W, H = DESIGN_H, S = 1;
+
+  function img(src) {
+    const i = new Image();
+    i.src = src;
+    return i;
+  }
+  function padImage(img, padFactor) {
+    const c = document.createElement('canvas');
+    const px = Math.round(img.width * padFactor);
+    const py = Math.round(img.height * padFactor);
+    c.width = img.width + px * 2;
+    c.height = img.height + py * 2;
+    const g = c.getContext('2d');
+    g.drawImage(img, px, py);
+    const out = new Image();
+    out.src = c.toDataURL('image/png');
+    return out;
+  }
+
+  const bg = img(BG_SRC);
+  const rawChuko = CHUKO_SRCS.map(img);
+  const rawKhan = KHAN_SRCS.map(img);
+  const rawSaka = SAKA_SRCS.map(img);
+
+  let chukoImgs = [];
+  let khanImgs = [];
+  let sakaImgs = [];
+  let assetsReady = false;
+
+  let pieces = [];
+  let saka = null;
+  let particles = [];
+  let ripples = [];
+  let confetti = [];
+  let pointerId = null;
+  let dragPoint = null;
+  let flight = null;
+  let lastTime = 0;
+  let state = 'boot';
+
+  const GAME_CFG = window.X2_GAME_CONFIG || {};
+  const URL_PARAMS = new URLSearchParams(window.location.search);
+  const GAME_ID = URL_PARAMS.get('gameId') || GAME_CFG.gameId || 'CHUKO';
+
+  const I18N = {
+    RU: {
+      balance: 'Баланс',
+      stake: 'Ставка',
+      wins: 'ВЫИГРЫШИ',
+      knocked: 'ВЫБИТО',
+      multiplier: 'МНОЖИТЕЛЬ',
+      khan: 'ХАН',
+      stood: 'УСТОЯЛ',
+      newGame: 'Новая игра',
+      makeThrow: 'Сделать бросок',
+      loading: 'Загрузка...',
+      retry: 'Повторить',
+      throwing: 'Бросок...',
+      win: 'ВЫИГРЫШ',
+      winTitle: 'Выигрыш!',
+      khanOut: 'ХАН выбит!',
+      howToPlay: 'Как играть',
+      myGames: 'Мои игры',
+      game: 'Игра',
+      tournaments: 'Турниры',
+      bonuses: 'Бонусы',
+      history: 'История',
+      profile: 'Профиль',
+      tagline: 'Выбей ХАНА — умножь выигрыш',
+      strongThrow: 'СИЛЬНЫЙ БРОСОК!',
+      aimedThrow: 'МЕТКИЙ БРОСОК!',
+      khanWobble: 'ХАН качнулся...',
+      insufficient: 'Недостаточно средств',
+      sessionEnded: 'Сессия завершена',
+      gameStartError: 'Не удалось начать игру',
+      balanceError: 'Ошибка загрузки баланса',
+      denomination: 'Номинал',
+      currency: 'Валюта',
+      language: 'Язык',
+      realMode: 'REAL',
+      demoMode: 'DEMO'
+    },
+    KG: {
+      balance: 'Баланс',
+      stake: 'Коюм',
+      wins: 'УТУШТАР',
+      knocked: 'ЧЫКТЫ',
+      multiplier: 'КӨБӨЙТКҮЧ',
+      khan: 'ХАН',
+      stood: 'КАЛДЫ',
+      newGame: 'Жаңы оюн',
+      makeThrow: 'Ыргытуу',
+      loading: 'Жүктөлүүдө...',
+      retry: 'Кайталоо',
+      throwing: 'Ыргытуу...',
+      win: 'УТУШ',
+      winTitle: 'Утуш!',
+      khanOut: 'ХАН чыкты!',
+      howToPlay: 'Кантип ойноо керек',
+      myGames: 'Менин оюндарым',
+      game: 'Оюн',
+      tournaments: 'Турнирлер',
+      bonuses: 'Бонустар',
+      history: 'Тарых',
+      profile: 'Профиль',
+      tagline: 'ХАНДЫ кулат — утушту көбөйт',
+      strongThrow: 'КҮЧТҮҮ ЫРГЫТУУ!',
+      aimedThrow: 'ТАК ЫРГЫТУУ!',
+      khanWobble: 'ХАН теңселди...',
+      insufficient: 'Каражат жетишсиз',
+      sessionEnded: 'Сессия аяктады',
+      gameStartError: 'Оюн башталган жок',
+      balanceError: 'Баланс жүктөлгөн жок',
+      denomination: 'Номинал',
+      currency: 'Валюта',
+      language: 'Тил',
+      realMode: 'REAL',
+      demoMode: 'DEMO'
+    }
+  };
+
+  let language = 'RU';
+  let currency = 'KGS';
+  let currencyDisplay = 'сом';
+  let denominations = [100];
+
+  function tr(key) {
+    return (I18N[language] || I18N.RU)[key] || I18N.RU[key] || key;
+  }
+
+  function normalizeLanguage(value) {
+    const v = String(value || 'RU').toUpperCase();
+    return v === 'KG' ? 'KG' : 'RU';
+  }
+
+  function currencyLabel() {
+    return currencyDisplay || currency || '';
+  }
+
+  function currentDenominations() {
+    return [...new Set(
+      (Array.isArray(denominations) ? denominations : [denominations])
+        .map(Number)
+        .filter(n => Number.isFinite(n) && n > 0)
+    )];
+  }
+
+  let scenario = null;
+  let ticket = null;
+  let pendingBalance = null;
+  let serverWin = 0;
+  let serverMultiplier = 0;
+  let knocked = 0;
+  let khanOut = false;
+  let resultShown = false;
+  let finalizeAt = 0;
+  let roundStartedAt = 0;
+  let lastOutAt = 0;
+  let resultDelayUntil = 0;
+  let scorePulse = 0;
+  let spin = 0;
+  let balance = null;
+  let realBalance = null;
+  let demoBalance = Number(GAME_CFG.demoBalance || 10000);
+
+  let gameMode = String(URL_PARAMS.get('mode') || GAME_CFG.mode || 'real').toLowerCase() === 'demo'
+    ? 'demo'
+    : 'real';
+  let demoAllowed = Boolean(GAME_CFG.demo
