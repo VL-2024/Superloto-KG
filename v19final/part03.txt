@@ -1,0 +1,344 @@
+ry {
+      const data = gameMode === 'demo'
+        ? await window.X2LMS.createDemoTicket({
+            gameId: GAME_ID,
+            denomination: stake,
+            currency,
+            currencyDisplay,
+            language,
+            demoBalance
+          })
+        : await window.X2LMS.createTicket({
+            gameId: GAME_ID,
+            denomination: stake,
+            currency,
+            currencyDisplay,
+            language
+          });
+
+      // Prepare fresh visuals only after LMS has successfully created/returned the ticket.
+      resetRound();
+
+      ticket = data;
+      stake = Number(data.denomination ?? stake);
+      if (data.currency) currency = String(data.currency).toUpperCase();
+      if (data.currencyDisplay || data.currencyLabel || data.currencySymbol) {
+        currencyDisplay = String(
+          data.currencyDisplay ||
+          data.currencyLabel ||
+          data.currencySymbol
+        );
+      }
+      pendingBalance = Number(data.balance);
+      serverWin = Number(data.win || 0);
+      serverMultiplier = data.multiplier != null
+        ? Number(data.multiplier)
+        : (stake > 0 ? serverWin / stake : 0);
+      scenario = scenarioFromLms(data.scenario);
+      state = 'ready';
+
+      window.X2LMS.emit('X2_GAME_TICKET_READY', {
+        gameId: GAME_ID,
+        ticketId: data.ticketId,
+        scenario: data.scenario,
+        denomination: stake,
+        currency,
+        language,
+        mode: gameMode
+      });
+    } catch (err) {
+      console.error('[CHUKO] new game failed', err);
+      state = 'idle';
+
+      const code = err.code || 'NEW_GAME_ERROR';
+      const text =
+        code === 'INSUFFICIENT_FUNDS' ? tr('insufficient') :
+        code === 'SESSION_EXPIRED' ? tr('sessionEnded') :
+        tr('gameStartError');
+
+      showToast(text, false);
+      if (window.X2LMS) {
+        window.X2LMS.emit('X2_GAME_ERROR', {
+          stage: 'newGame',
+          code,
+          message: err.message || String(err)
+        });
+      }
+    }
+  }
+
+  function pointFromEvent(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / S, y: (e.clientY - r.top) / S };
+  }
+  function hitRect(p, rect) {
+    return p.x >= rect.x - rect.w/2 && p.x <= rect.x + rect.w/2 &&
+           p.y >= rect.y - rect.h/2 && p.y <= rect.y + rect.h/2;
+  }
+
+  function spawnParticles(x, y, gold=false, count=16) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = rand(18, 72);
+      particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: rand(600, 980), max: 980, r: rand(1.4, 3.8), gold
+      });
+    }
+  }
+  function spawnRipple(x, y, gold=false) {
+    ripples.push({
+      x, y, r: 8, maxR: gold ? 54 : 42, life: 0, maxLife: gold ? 560 : 420, gold
+    });
+  }
+  function showToast(text, gold=false) {
+    toast = { text, gold, until: performance.now() + 950 };
+  }
+  function showWinBubble(value, khan=false) {
+    winBubble = { show: true, value, khan, until: performance.now() + 1750 };
+  }
+  function spawnConfetti() {
+    for (let i = 0; i < 28; i++) {
+      confetti.push({
+        x: rand(250, 690), y: rand(190, 440),
+        vx: rand(-1.3, 1.3), vy: rand(0.8, 2.5),
+        s: rand(4, 8), rot: rand(0, Math.PI * 2), vr: rand(-0.08, 0.08),
+        life: rand(1200, 1700),
+        color: ['#DBE63C', '#FFE17F', '#77A7FF', '#D3DDE7'][Math.floor(Math.random() * 4)]
+      });
+    }
+  }
+
+  function markOut(p, gold=false) {
+    if (p.out) return;
+    p.out = true;
+    p.alpha = 1;
+    p.vx = 0;
+    p.vy = 0;
+    if (p.type === 'khan') {
+      khanOut = true;
+      playImpact(true);
+    } else {
+      knocked += 1;
+      playImpact(false);
+    }
+    lastOutAt = performance.now();
+    resultDelayUntil = lastOutAt + 560;
+    scorePulse = 1;
+    spawnParticles(p.x, p.y, gold, gold ? 20 : 16);
+    spawnRipple(p.x, p.y, gold);
+  }
+
+  function chooseTargets() {
+    if (scenario.guided) return;
+
+    const bones = pieces.filter(p => p.type === 'bone' && !p.out);
+
+    // Prefer the central cluster, then randomise slightly for visual variety.
+    bones.sort((a, b) =>
+      Math.hypot(a.x - BOARD.cx, a.y - BOARD.cy) -
+      Math.hypot(b.x - BOARD.cx, b.y - BOARD.cy)
+    );
+
+    const pool = bones.slice(0, Math.min(9, bones.length));
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    scenario.targets = pool.slice(0, scenario.n);
+    scenario.targets.forEach(p => {
+      p.targetWin = true;
+      p.ejectAnim = null;
+    });
+
+    scenario.guided = true;
+  }
+
+  function buildEjectAnim(piece, startAt, index=0, fast=false) {
+    // Direction is mostly radial, with a small tangential component.
+    let dx = piece.x - BOARD.cx;
+    let dy = piece.y - BOARD.cy;
+    let L = Math.hypot(dx, dy) || 1;
+    let dirX = dx / L;
+    let dirY = dy / L;
+
+    const tangentAmount = rand(-0.24, 0.24);
+    const tx = -dirY;
+    const ty = dirX;
+
+    dirX += tx * tangentAmount;
+    dirY += ty * tangentAmount;
+    L = Math.hypot(dirX, dirY) || 1;
+    dirX /= L;
+    dirY /= L;
+
+    const endDist = BOARD.innerR + rand(45, 62);
+    const ex = BOARD.cx + dirX * endDist;
+    const ey = BOARD.cy + dirY * endDist;
+
+    return {
+      startAt,
+      duration: fast ? rand(420, 500) : rand(610, 760),
+      started: false,
+      rimFx: false,
+      sx: piece.x,
+      sy: piece.y,
+      ex,
+      ey,
+      dirX,
+      dirY,
+      tangentX: tx,
+      tangentY: ty,
+      curve: rand(-24, 24),
+      startAngle: piece.angle,
+      spin: rand(-1.4, 1.4) * Math.PI,
+      index
+    };
+  }
+
+  function launchTargets(now) {
+    chooseTargets();
+    if (scenario.launched) return;
+    scenario.launched = true;
+
+    const ordered = [...scenario.targets].sort((a, b) => a.y - b.y);
+    ordered.forEach((p, i) => {
+      p.ejectAnim = buildEjectAnim(p, now + i * 110 + rand(0, 35), i, false);
+    });
+  }
+
+  function updateTargetEjections(now) {
+    if (!scenario.guided) return;
+
+    for (const p of scenario.targets) {
+      if (p.out || !p.ejectAnim) continue;
+
+      const a = p.ejectAnim;
+      if (now < a.startAt) continue;
+
+      if (!a.started) {
+        a.started = true;
+
+        // Capture the exact current position only once.
+        a.sx = p.x;
+        a.sy = p.y;
+
+        // Recalculate endpoint from the actual position at take-off.
+        let dx = p.x - BOARD.cx;
+        let dy = p.y - BOARD.cy;
+        let L = Math.hypot(dx, dy) || 1;
+        let dirX = dx / L;
+        let dirY = dy / L;
+
+        const tx = -dirY;
+        const ty = dirX;
+        const tangential = rand(-0.20, 0.20);
+
+        dirX += tx * tangential;
+        dirY += ty * tangential;
+        L = Math.hypot(dirX, dirY) || 1;
+        dirX /= L;
+        dirY /= L;
+
+        a.dirX = dirX;
+        a.dirY = dirY;
+        a.tangentX = tx;
+        a.tangentY = ty;
+
+        const endDist = BOARD.innerR + rand(46, 60);
+        a.ex = BOARD.cx + dirX * endDist;
+        a.ey = BOARD.cy + dirY * endDist;
+
+        p.vx = 0;
+        p.vy = 0;
+        p.angV = 0;
+
+        spawnParticles(p.x, p.y, false, 8);
+        spawnRipple(p.x, p.y, false);
+        playImpact(false);
+      }
+
+      const raw = Math.min(1, (now - a.startAt) / a.duration);
+      const t = easeOutCubic(raw);
+
+      // Smooth curved movement. No physics/second push is applied to these pieces.
+      const c1x = a.sx + a.dirX * 42 + a.tangentX * a.curve;
+      const c1y = a.sy + a.dirY * 42 + a.tangentY * a.curve;
+      const c2x = a.ex - a.dirX * 48 + a.tangentX * a.curve * 0.45;
+      const c2y = a.ey - a.dirY * 48 + a.tangentY * a.curve * 0.45;
+
+      p.x = cubicPoint(t, a.sx, c1x, c2x, a.ex);
+      p.y = cubicPoint(t, a.sy, c1y, c2y, a.ey);
+      p.angle = a.startAngle + a.spin * t;
+
+      // One visible rim-crossing effect.
+      if (!a.rimFx) {
+        const dPiece = Math.hypot(p.x - BOARD.cx, p.y - BOARD.cy);
+        if (dPiece > BOARD.innerR - p.r + 12) {
+          a.rimFx = true;
+          spawnParticles(p.x, p.y, false, 10);
+          spawnRipple(p.x, p.y, false);
+        }
+      }
+
+      if (raw >= 1) {
+        // Piece is already visibly outside. Marking it out does NOT move it again.
+        p.x = a.ex;
+        p.y = a.ey;
+        markOut(p, false);
+      }
+    }
+  }
+
+  function forceTargetsOut(now) {
+    // Safety no longer teleports or re-launches pieces.
+    // It only starts/accelerates the same one-shot animation.
+    if (!scenario.guided) chooseTargets();
+    if (!scenario.launched) launchTargets(now);
+
+    scenario.targets.forEach((p, i) => {
+      if (p.out) return;
+
+      if (!p.ejectAnim) {
+        p.ejectAnim = buildEjectAnim(p, now + i * 35, i, true);
+        return;
+      }
+
+      const a = p.ejectAnim;
+
+      if (!a.started) {
+        a.startAt = Math.min(a.startAt, now + i * 30);
+        a.duration = Math.min(a.duration, 500);
+      } else {
+        // If a browser frame was delayed, advance this SAME animation.
+        // Never create a second flight.
+        const elapsed = now - a.startAt;
+        if (elapsed > a.duration + 250) {
+          a.startAt = now - a.duration * 0.94;
+        }
+      }
+    });
+  }
+
+  function startKhanDrama(now) {
+    if (!scenario.khan || scenario.khanStarted) return;
+    scenario.khanStarted = true;
+    const kh = pieces.find(p => p.type === 'khan');
+    if (!kh || kh.out) return;
+    const ang = rand(-0.96, 0.96);
+    kh.teeter = {
+      state: 'approach', dirX: Math.cos(ang), dirY: Math.sin(ang),
+      edgeDist: BOARD.innerR - 42, start: now, approachEnd: now + 520,
+      teeterEnd: now + 1430, pushEnd: now + 1880, baseAngle: kh.angle
+    };
+    showToast(tr('khanWobble'), true);
+  }
+  function updateKhanDrama(now) {
+    const kh = pieces.find(p => p.type === 'khan');
+    if (!kh || !kh.teeter || kh.out) return;
+    const t = kh.teeter;
+    if (t.state === 'approach') {
+      const pr = Math.min(1, (now - t.start) / (t.approachEnd - t.start));
+      const eased = easeOutCubic(pr);
+      c
