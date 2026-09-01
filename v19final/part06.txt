@@ -1,0 +1,308 @@
+Style = p.gold ? '#FFE17F' : '#FFF1BF';
+      ctx.beginPath();
+      ctx.arc(p.x * S, p.y * S, p.r * S, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  function drawRipples(dt) {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.life += dt;
+      if (r.life >= r.maxLife) { ripples.splice(i, 1); continue; }
+      const t = r.life / r.maxLife;
+      const rr0 = r.r + (r.maxR - r.r) * t;
+      ctx.save();
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = r.gold ? 'rgba(255,225,120,.75)' : 'rgba(255,255,255,.38)';
+      ctx.lineWidth = (r.gold ? 3 : 2) * S * (1 - t * 0.45);
+      ctx.beginPath();
+      ctx.arc(r.x * S, r.y * S, rr0 * S, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  function drawConfetti(dt) {
+    for (let i = confetti.length - 1; i >= 0; i--) {
+      const c = confetti[i];
+      c.life -= dt;
+      c.x += c.vx * dt * 0.06;
+      c.y += c.vy * dt * 0.06;
+      c.rot += c.vr * dt * 0.03;
+      if (c.life <= 0) { confetti.splice(i, 1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, c.life / 1700);
+      ctx.translate(c.x * S, c.y * S);
+      ctx.rotate(c.rot);
+      ctx.fillStyle = c.color;
+      ctx.fillRect(-(c.s * S) / 2, -(c.s * S) / 2, c.s * S, c.s * S * 0.74);
+      ctx.restore();
+    }
+  }
+
+
+  function drawModeSwitch() {
+    if (!demoAllowed) return;
+
+    const x = MODE_SWITCH.x - MODE_SWITCH.w / 2;
+    const y = MODE_SWITCH.y - MODE_SWITCH.h / 2;
+    const half = MODE_SWITCH.w / 2;
+
+    ctx.save();
+
+    ctx.fillStyle = 'rgba(5,25,60,.94)';
+    ctx.strokeStyle = 'rgba(160,195,235,.34)';
+    ctx.lineWidth = 1.2 * S;
+    rr(x*S, y*S, MODE_SWITCH.w*S, MODE_SWITCH.h*S, 17*S);
+    ctx.fill();
+    rr(x*S, y*S, MODE_SWITCH.w*S, MODE_SWITCH.h*S, 17*S);
+    ctx.stroke();
+
+    const activeX = gameMode === 'real' ? x : x + half;
+    ctx.fillStyle = 'rgba(37,72,164,.98)';
+    rr((activeX+3)*S, (y+3)*S, (half-6)*S, (MODE_SWITCH.h-6)*S, 14*S);
+    ctx.fill();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `900 ${16*S}px Inter, sans-serif`;
+
+    ctx.fillStyle = gameMode === 'real' ? '#DBE63C' : '#8DA2BC';
+    ctx.fillText(tr('realMode'), (x + half/2)*S, MODE_SWITCH.y*S);
+
+    ctx.fillStyle = gameMode === 'demo' ? '#DBE63C' : '#8DA2BC';
+    ctx.fillText(tr('demoMode'), (x + half + half/2)*S, MODE_SWITCH.y*S);
+
+    ctx.restore();
+  }
+
+  function drawSelectors() {
+    if (selectorOpen === 'stake') {
+      const list = currentDenominations();
+      const x = 684, w = 207, rowH = 50, top = 105;
+
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,.48)';
+      ctx.shadowBlur = 18*S;
+
+      for (let i=0;i<list.length;i++) {
+        const selected = Number(list[i]) === Number(stake);
+
+        ctx.fillStyle = selected ? 'rgba(35,69,158,.99)' : 'rgba(5,25,60,.99)';
+        ctx.strokeStyle = selected ? 'rgba(219,230,60,.65)' : 'rgba(160,195,235,.25)';
+        ctx.lineWidth = 1*S;
+
+        rr(x*S, (top+i*rowH)*S, w*S, rowH*S, i===0 ? 14*S : 4*S);
+        ctx.fill();
+        rr(x*S, (top+i*rowH)*S, w*S, rowH*S, i===0 ? 14*S : 4*S);
+        ctx.stroke();
+
+        ctx.fillStyle = selected ? '#DBE63C' : '#ffffff';
+        ctx.textAlign='center';
+        ctx.textBaseline='middle';
+        ctx.font=`800 ${19*S}px Inter, sans-serif`;
+        ctx.fillText(`${list[i]} ${currencyLabel()}`, (x+w/2)*S, (top+i*rowH+rowH/2)*S);
+      }
+      ctx.restore();
+    }
+  }
+
+  function coverTextRect(x, y, w, h) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,24,59,.98)';
+    ctx.fillRect(x*S, y*S, w*S, h*S);
+    ctx.restore();
+  }
+
+  function drawKgStaticOverlays() {
+    if (language !== 'KG') return;
+
+    // Header labels baked into the RU background.
+    coverTextRect(435, 27, 118, 56);
+    coverTextRect(704, 27, 112, 56);
+
+    ctx.save();
+    ctx.textAlign='left';
+    ctx.textBaseline='middle';
+    ctx.fillStyle='#ffffff';
+    ctx.font=`500 ${19*S}px Inter, sans-serif`;
+    ctx.fillText(tr('balance'), 443*S, 39*S);
+    ctx.fillText(tr('stake'), 724*S, 39*S);
+    ctx.restore();
+
+    // Tagline.
+    coverTextRect(230, 272, 493, 50);
+    ctx.save();
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.fillStyle='#DBE63C';
+    ctx.font=`500 ${28*S}px Inter, sans-serif`;
+    ctx.fillText(tr('tagline'), 470.5*S, 297*S);
+    ctx.restore();
+
+    // Win table textual labels.
+    coverTextRect(69, 902, 177, 32);
+    ctx.save();
+    ctx.fillStyle='#DBE63C';
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.font=`600 ${20*S}px Inter, sans-serif`;
+    ctx.fillText(tr('wins'), 145*S, 918*S);
+    ctx.restore();
+
+    coverTextRect(115, 945, 103, 36);
+    coverTextRect(118, 1016, 100, 36);
+    ctx.save();
+    ctx.fillStyle='#fff';
+    ctx.textAlign='left';
+    ctx.textBaseline='middle';
+    ctx.font=`500 ${17*S}px Inter, sans-serif`;
+    ctx.fillText('3 чүкө =', 135*S, 965*S);
+    ctx.fillText('5 чүкө =', 135*S, 1036*S);
+    ctx.restore();
+
+    // Right-side buttons.
+    coverTextRect(795, 974, 88, 26);
+    coverTextRect(795, 1080, 91, 27);
+    ctx.save();
+    ctx.fillStyle='#fff';
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.font=`500 ${14*S}px Inter, sans-serif`;
+    ctx.fillText(tr('howToPlay'), 839*S, 986*S);
+    ctx.fillText(tr('myGames'), 839*S, 1093*S);
+    ctx.restore();
+
+    // Bottom nav labels.
+    const nav = [
+      [83, 1605, tr('game')],
+      [271,1605,tr('tournaments')],
+      [459,1605,tr('bonuses')],
+      [650,1605,tr('history')],
+      [838,1605,tr('profile')]
+    ];
+    nav.forEach(([x,y,text],idx) => {
+      coverTextRect(x-70, y-18, 140, 38);
+      ctx.save();
+      ctx.fillStyle=idx===0?'#DBE63C':'#879BB6';
+      ctx.textAlign='center';
+      ctx.textBaseline='middle';
+      ctx.font=`500 ${19*S}px Inter, sans-serif`;
+      ctx.fillText(text,x*S,y*S);
+      ctx.restore();
+    });
+  }
+
+  function drawHud() {
+    drawCleanLowerArea();
+    drawKgStaticOverlays();
+    drawModeSwitch();
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 ${24*S}px Inter, sans-serif`;
+    ctx.fillText(fmtMoney(balance) + ' ' + currencyLabel(), 503 * S, 78 * S);
+    ctx.fillText(stake + ' ' + currencyLabel(), 785 * S, 78 * S);
+    ctx.restore();
+
+    for (const cell of SCORE_CELLS) {
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#B7C9DE';
+      ctx.font = `700 ${18*S}px Inter, sans-serif`;
+      const translatedLabel =
+        cell.label === 'ВЫБИТО' ? tr('knocked') :
+        cell.label === 'МНОЖИТЕЛЬ' ? tr('multiplier') :
+        tr('khan');
+      ctx.fillText(translatedLabel, cell.x * S, (SCORE_Y - 22) * S);
+
+      let value = '', color = '#ffffff';
+      if (cell.label === 'ВЫБИТО') {
+        value = String(knocked); color = '#ffffff';
+      } else if (cell.label === 'МНОЖИТЕЛЬ') {
+        value = 'x' + fmtMultiplier(totalMult()); color = '#DBE63C';
+      } else {
+        value = khanOut ? 'x5' : tr('stood'); color = '#FFD45D';
+      }
+
+      const pulse = 1 + scorePulse * 0.12;
+      ctx.fillStyle = color;
+      ctx.font = `900 ${(42*pulse)*S}px Inter, sans-serif`;
+      ctx.fillText(value, cell.x * S, (SCORE_Y + 27) * S);
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `900 ${34*S}px Inter, sans-serif`;
+    const buttonLabel =
+      state === 'ready' ? tr('makeThrow') :
+      (state === 'idle' || state === 'settled') ? tr('newGame') :
+      state === 'requesting' ? tr('loading') :
+      state === 'loading' ? tr('loading') :
+      state === 'error' ? tr('retry') :
+      tr('throwing');
+    ctx.fillText(buttonLabel, BTN.x * S, BTN.y * S + 2 * S);
+    ctx.restore();
+
+    if (toast.until > performance.now()) {
+      ctx.save();
+      const tw = 260 * S, th = 58 * S, tx = 470.5 * S - tw / 2, ty = 1130 * S - th / 2;
+      ctx.fillStyle = 'rgba(6,24,58,.98)';
+      ctx.strokeStyle = toast.gold ? 'rgba(255,225,127,.44)' : 'rgba(255,255,255,.12)';
+      ctx.lineWidth = 1.2 * S;
+      rr(tx, ty, tw, th, 18 * S);
+      ctx.fill();
+      rr(tx, ty, tw, th, 18 * S);
+      ctx.stroke();
+      ctx.fillStyle = toast.gold ? '#FFE17F' : '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `900 ${22*S}px Inter, sans-serif`;
+      ctx.fillText(toast.text, 470.5 * S, 1130 * S + 1 * S);
+      ctx.restore();
+    }
+
+    if (winBubble.show && winBubble.until > performance.now()) {
+      drawHalo(470.5, 935, 155, `rgba(255,220,110,${winBubble.khan ? 0.24 : 0.14})`, 'rgba(255,220,110,0)');
+      ctx.save();
+      const pw = 356 * S, ph = 172 * S, x = 470.5 * S - pw / 2, y = 850 * S;
+      ctx.fillStyle = 'rgba(8,31,73,.97)';
+      ctx.strokeStyle = 'rgba(255,255,255,.18)';
+      ctx.lineWidth = 1.2 * S;
+      rr(x, y, pw, ph, 22 * S);
+      ctx.fill();
+      rr(x, y, pw, ph, 22 * S);
+      ctx.stroke();
+
+      const progress = Math.min(1, (1750 - (winBubble.until - performance.now())) / 900);
+      const current = Math.round(winBubble.value * (1 - Math.pow(1 - progress, 3)));
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#B9CBE0';
+      ctx.font = `900 ${16*S}px Inter, sans-serif`;
+      ctx.fillText(winBubble.khan ? tr('khan') : tr('win'), 470.5 * S, 884 * S);
+      ctx.fillStyle = winBubble.khan ? '#FFE17F' : '#ffffff';
+      ctx.font = `900 ${28*S}px Inter, sans-serif`;
+      ctx.fillText(winBubble.khan ? tr('khanOut') : tr('winTitle'), 470.5 * S, 923 * S);
+      ctx.fillStyle = '#DBE63C';
+      ctx.font = `1000 ${40*S}px Inter, sans-serif`;
+      ctx.fillText(fmtMoney(current) + ' ' + currencyLabel(), 470.5 * S, 978 * S);
+      ctx.restore();
+    }
+
+    drawSelectors();
+  }
+
+  function bootWhenReady() {
+    const allRaw = [bg, ...rawChuko, ...rawKhan, ...rawSaka];
+    let loaded = 0;
+    function onLoad() {
+      loaded++;
+      if (loaded !== allRaw.length) return;
+      chukoImgs = rawChuko.map(i => padImage(i, 0.25));
+     
