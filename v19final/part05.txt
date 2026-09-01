@@ -1,0 +1,301 @@
+;
+      p.y += p.vy * dt * 0.06;
+      p.angle += p.angV * dt * 0.06;
+
+      const fr = p === saka ? 0.992 : 0.989;
+      p.vx *= Math.pow(fr, dt);
+      p.vy *= Math.pow(fr, dt);
+      p.angV *= Math.pow(0.993, dt);
+    }
+
+    for (let i = 0; i < activeMovers.length; i++) {
+      for (let j = i + 1; j < activeMovers.length; j++) {
+        collide(activeMovers[i], activeMovers[j]);
+      }
+    }
+
+    updateKhanDrama(now);
+
+    // Rim handling applies only to pieces NOT controlled by the one-shot fly-out animation.
+    for (const p of pieces) {
+      if (p.out) continue;
+      if (p.type === 'khan' && p.teeter) continue;
+      if (p.type === 'bone' && p.targetWin && p.ejectAnim && p.ejectAnim.started) continue;
+
+      const dPiece = Math.hypot(p.x - BOARD.cx, p.y - BOARD.cy);
+      const rimLimit = BOARD.innerR - p.r + 10;
+
+      // Before a winning chuko starts its animation, keep it inside.
+      // Non-winning chuko always remain inside.
+      if (dPiece > rimLimit) {
+        if (p.type === 'khan' && scenario.khan) {
+          // KHAN exit is controlled only by the KHAN drama.
+        } else {
+          const nx = (p.x - BOARD.cx) / (dPiece || 1);
+          const ny = (p.y - BOARD.cy) / (dPiece || 1);
+
+          p.x = BOARD.cx + nx * (rimLimit - 4);
+          p.y = BOARD.cy + ny * (rimLimit - 4);
+
+          const dot = p.vx * nx + p.vy * ny;
+          p.vx -= 1.7 * dot * nx;
+          p.vy -= 1.7 * dot * ny;
+          p.vx *= 0.62;
+          p.vy *= 0.62;
+        }
+      }
+    }
+
+    // SAKA always bounces inside the circle.
+    const d = Math.hypot(saka.x - BOARD.cx, saka.y - BOARD.cy);
+    const maxD = BOARD.innerR - saka.r + 10;
+
+    if (d > maxD) {
+      const nx = (saka.x - BOARD.cx) / (d || 1);
+      const ny = (saka.y - BOARD.cy) / (d || 1);
+
+      saka.x = BOARD.cx + nx * maxD;
+      saka.y = BOARD.cy + ny * maxD;
+
+      const dot = saka.vx * nx + saka.vy * ny;
+      saka.vx -= 2 * dot * nx;
+      saka.vy -= 2 * dot * ny;
+      saka.vx *= 0.82;
+      saka.vy *= 0.82;
+
+      spawnRipple(saka.x, saka.y, false);
+    }
+
+    // KHAN hard safety: finish the SAME KHAN sequence, not a second animation.
+    if (scenario.khan && !khanOut && now > roundStartedAt + 5600) {
+      const kh = pieces.find(p => p.type === 'khan');
+      if (kh && !kh.out) {
+        const dx = kh.x - BOARD.cx || 1;
+        const dy = kh.y - BOARD.cy;
+        const L = Math.hypot(dx, dy) || 1;
+
+        kh.teeter = null;
+        kh.x = BOARD.cx + (dx / L) * (BOARD.innerR + 48);
+        kh.y = BOARD.cy + (dy / L) * (BOARD.innerR + 48);
+        markOut(kh, true);
+      }
+    }
+
+    const targetsDone =
+      scenario.targets.length === scenario.n &&
+      scenario.targets.every(p => p.out);
+
+    const outcomeDone =
+      targetsDone &&
+      (!scenario.khan || khanOut);
+
+    // Critical ordering:
+    // 1. all selected chuko finish their one flight;
+    // 2. KHAN finishes, if applicable;
+    // 3. short visual pause;
+    // 4. only then show the win.
+    const revealNotBefore = scenario.n === 0
+      ? roundStartedAt + 2300
+      : Math.max(resultDelayUntil, lastOutAt + 520);
+
+    if (
+      outcomeDone &&
+      !resultShown &&
+      now > revealNotBefore
+    ) {
+      state = 'settled';
+      saka.vx = 0;
+      saka.vy = 0;
+      finalizeResult();
+      return;
+    }
+
+    // Absolute safety timeout. It can only accelerate unfinished one-shot animations.
+    if (!resultShown && roundStartedAt && now > roundStartedAt + 7200) {
+      forceTargetsOut(now);
+
+      if (scenario.khan && !khanOut) {
+        const kh = pieces.find(p => p.type === 'khan');
+        if (kh && !kh.out) {
+          const dx = kh.x - BOARD.cx || 1;
+          const dy = kh.y - BOARD.cy;
+          const L = Math.hypot(dx, dy) || 1;
+
+          kh.teeter = null;
+          kh.x = BOARD.cx + (dx / L) * (BOARD.innerR + 48);
+          kh.y = BOARD.cy + (dy / L) * (BOARD.innerR + 48);
+          markOut(kh, true);
+        }
+      }
+    }
+  }
+
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawImageCentered(im, x, y, size, angle=0, alpha=1, shadow=true) {
+    if (!im || !im.complete) return;
+    const xx = x * S, yy = y * S, ss = size * S;
+    ctx.save();
+    ctx.translate(xx, yy);
+    ctx.rotate(angle);
+    ctx.globalAlpha = alpha;
+    if (shadow) {
+      ctx.shadowColor = 'rgba(0,0,0,.42)';
+      ctx.shadowBlur = 14 * S;
+      ctx.shadowOffsetY = 8 * S;
+    }
+    ctx.drawImage(im, -ss / 2, -ss / 2, ss, ss);
+    ctx.restore();
+  }
+  function drawHalo(x, y, r, c1, c2) {
+    const g = ctx.createRadialGradient(x * S, y * S, 0, x * S, y * S, r * S);
+    g.addColorStop(0, c1);
+    g.addColorStop(1, c2);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x * S, y * S, r * S, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBackground() {
+    if (bg.complete) ctx.drawImage(bg, 0, 0, W, H);
+  }
+  function drawCleanLowerArea() {
+    ctx.save();
+
+    // Narrow score strip: below SAKA and below the win table.
+    const scoreBg = ctx.createLinearGradient(0, CLEAN_SCORE.y * S, 0, (CLEAN_SCORE.y + CLEAN_SCORE.h) * S);
+    scoreBg.addColorStop(0, 'rgba(5,23,57,.985)');
+    scoreBg.addColorStop(1, 'rgba(4,18,44,.995)');
+    ctx.fillStyle = scoreBg;
+    rr(CLEAN_SCORE.x * S, CLEAN_SCORE.y * S, CLEAN_SCORE.w * S, CLEAN_SCORE.h * S, 24 * S);
+    ctx.fill();
+
+    for (const cell of SCORE_CELLS) {
+      const x = (cell.x - cell.w / 2) * S;
+      const y = (SCORE_Y - 54) * S;
+      const w = cell.w * S;
+      const h = 110 * S;
+      const cg = ctx.createLinearGradient(0, y, 0, y + h);
+      cg.addColorStop(0, 'rgba(8,31,73,.995)');
+      cg.addColorStop(1, 'rgba(4,20,48,.995)');
+      ctx.fillStyle = cg;
+      rr(x, y, w, h, 24 * S);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(211,221,231,.15)';
+      ctx.lineWidth = 1.2 * S;
+      rr(x, y, w, h, 24 * S);
+      ctx.stroke();
+    }
+
+    // Only the button zone is repainted — no large plate over SAKA/table.
+    const bg2 = ctx.createLinearGradient(0, CLEAN_BUTTON.y * S, 0, (CLEAN_BUTTON.y + CLEAN_BUTTON.h) * S);
+    bg2.addColorStop(0, 'rgba(5,21,52,.99)');
+    bg2.addColorStop(1, 'rgba(4,17,42,.995)');
+    ctx.fillStyle = bg2;
+    rr(CLEAN_BUTTON.x * S, CLEAN_BUTTON.y * S, CLEAN_BUTTON.w * S, CLEAN_BUTTON.h * S, 24 * S);
+    ctx.fill();
+
+    const btnGrad = ctx.createLinearGradient(0, (BTN.y - BTN.h/2) * S, 0, (BTN.y + BTN.h/2) * S);
+    btnGrad.addColorStop(0, 'rgba(47,76,191,.98)');
+    btnGrad.addColorStop(0.45, 'rgba(27,53,144,.99)');
+    btnGrad.addColorStop(1, 'rgba(12,31,94,.99)');
+    ctx.fillStyle = btnGrad;
+    rr((BTN.x - BTN.w/2) * S, (BTN.y - BTN.h/2) * S, BTN.w * S, BTN.h * S, 32 * S);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(230,235,255,.42)';
+    ctx.lineWidth = 2 * S;
+    rr((BTN.x - BTN.w/2 + 3) * S, (BTN.y - BTN.h/2 + 3) * S, (BTN.w - 6) * S, (BTN.h - 6) * S, 30 * S);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawTrail() {
+    if (state !== 'flight' || !flight) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(219,230,60,.38)';
+    ctx.lineWidth = 4 * S;
+    ctx.setLineDash([10 * S, 12 * S]);
+    ctx.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const tt = i / 24;
+      const x = cubicPoint(tt, flight.sx, flight.c1x, flight.c2x, flight.ex);
+      const y = cubicPoint(tt, flight.sy, flight.c1y, flight.c2y, flight.ey) - Math.sin(tt * Math.PI) * (18 + flight.pwr * 10);
+      if (i === 0) ctx.moveTo(x * S, y * S);
+      else ctx.lineTo(x * S, y * S);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawAimGuide() {
+    if (state !== 'ready' || !dragPoint) return;
+    const dx = SAKA_START.x - dragPoint.x;
+    const dy = SAKA_START.y - dragPoint.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 6) return;
+    const ux = dx / len, uy = dy / len;
+    const power = Math.min(1, len / 100);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,.75)';
+    ctx.lineWidth = 5 * S;
+    ctx.setLineDash([14 * S, 10 * S]);
+    ctx.beginPath();
+    ctx.moveTo(SAKA_START.x * S, (SAKA_START.y - 46) * S);
+    ctx.lineTo((SAKA_START.x + ux * (62 + power * 62)) * S, (SAKA_START.y + uy * (62 + power * 62) - 46) * S);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPieces() {
+    for (const p of pieces.filter(p => p.type === 'bone' && p.out)) {
+      drawImageCentered(p.img, p.x, p.y, 132, p.angle, p.alpha, true);
+    }
+    for (const p of pieces.filter(p => p.type === 'bone' && !p.out)) {
+      drawImageCentered(p.img, p.x, p.y, 132, p.angle, 1, true);
+    }
+
+    const kh = pieces.find(p => p.type === 'khan');
+    if (kh) {
+      const glow = kh.teeter ? 1 : 0.56 + Math.sin(spin * 4) * 0.14;
+      drawHalo(kh.x, kh.y, 66 + glow * 7, `rgba(255,205,70,${0.16 + glow * 0.2})`, 'rgba(255,205,70,0)');
+      if (kh.rimGlow > 0) {
+        drawHalo(kh.x, kh.y, 84 + Math.sin(spin * 10) * 4, `rgba(255,230,120,${0.12 + kh.rimGlow * 0.18})`, 'rgba(255,230,120,0)');
+      }
+      drawImageCentered(kh.img, kh.x, kh.y, 148, kh.angle, kh.alpha, true);
+    }
+
+    if (!saka) return;
+    if (state === 'flight') {
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(saka.x * S, (saka.y + 28 + saka.lift * 0.62) * S, 42 * S * saka.shadowStretch, 13 * S, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      drawImageCentered(saka.img, saka.x, saka.y - saka.lift, 174, saka.angle, 1, false);
+    } else {
+      drawImageCentered(saka.img, saka.x, saka.y, 174, saka.angle, 1, true);
+    }
+  }
+
+  function drawParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      p.x += p.vx * dt * 0.06;
+      p.y += p.vy * dt * 0.06;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fill
