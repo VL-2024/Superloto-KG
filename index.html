@@ -1,1 +1,1286 @@
-<!doctype html><html><head><meta charset="utf-8"><title>Preparing Chuko demo</title></head><body>Preparing demo…</body></html>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="format-detection" content="telephone=no">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>ЧҮКӨ — demo v9</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #041a41; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  body { display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
+  .app { width: min(100vw, 560px); }
+  .stage { position: relative; width: 100%; aspect-ratio: 941 / 1672; overflow: hidden; touch-action: none; user-select: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage" id="stage">
+    <canvas id="c"></canvas>
+  </div>
+</div>
+
+<script>
+(() => {
+  const BG_SRC = 'assets/background.webp';
+  const CHUKO_SRCS = ['assets/chuko_01.webp','assets/chuko_02.webp','assets/chuko_03.webp','assets/chuko_04.webp','assets/chuko_05.webp','assets/chuko_06.webp'];
+  const KHAN_SRCS = ['assets/khan_01.webp','assets/khan_02.webp','assets/khan_03.webp','assets/khan_04.webp','assets/khan_05.webp','assets/khan_06.webp'];
+  const SAKA_SRCS = ['assets/saka_01.webp','assets/saka_02.webp','assets/saka_03.webp','assets/saka_04.webp','assets/saka_05.webp','assets/saka_06.webp'];
+
+  const DESIGN_W = 941, DESIGN_H = 1672;
+  const BOARD = { cx: 470.5, cy: 684, innerR: 220 };
+  const SAKA_START = { x: 470.5, y: 1048 };
+  const BTN = { x: 470.5, y: 1436, w: 505, h: 94 };
+  const SCORE_Y = 1288;
+  const SCORE_CELLS = [
+    { x: 183, w: 228, label: 'ВЫБИТО' },
+    { x: 470.5, w: 236, label: 'МНОЖИТЕЛЬ' },
+    { x: 758, w: 228, label: 'ХАН' }
+  ];
+
+  // Only cover the old score/button remnants. Never cover SAKA or the win table.
+  const CLEAN_SCORE = { x: 56, y: 1215, w: 829, h: 142 };
+  const CLEAN_BUTTON = { x: 205, y: 1372, w: 531, h: 130 };
+
+  const canvas = document.getElementById('c');
+  const stage = document.getElementById('stage');
+  const ctx = canvas.getContext('2d');
+
+  let DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  let W = DESIGN_W, H = DESIGN_H, S = 1;
+
+  function img(src) {
+    const i = new Image();
+    i.src = src;
+    return i;
+  }
+  function padImage(img, padFactor) {
+    const c = document.createElement('canvas');
+    const px = Math.round(img.width * padFactor);
+    const py = Math.round(img.height * padFactor);
+    c.width = img.width + px * 2;
+    c.height = img.height + py * 2;
+    const g = c.getContext('2d');
+    g.drawImage(img, px, py);
+    const out = new Image();
+    out.src = c.toDataURL('image/png');
+    return out;
+  }
+
+  const bg = img(BG_SRC);
+  const rawChuko = CHUKO_SRCS.map(img);
+  const rawKhan = KHAN_SRCS.map(img);
+  const rawSaka = SAKA_SRCS.map(img);
+
+  let chukoImgs = [];
+  let khanImgs = [];
+  let sakaImgs = [];
+  let assetsReady = false;
+
+  let pieces = [];
+  let saka = null;
+  let particles = [];
+  let ripples = [];
+  let confetti = [];
+  let pointerId = null;
+  let dragPoint = null;
+  let flight = null;
+  let lastTime = 0;
+  let state = 'ready';
+
+  let scenario = null;
+  let knocked = 0;
+  let khanOut = false;
+  let resultShown = false;
+  let finalizeAt = 0;
+  let roundStartedAt = 0;
+  let lastOutAt = 0;
+  let resultDelayUntil = 0;
+  let scorePulse = 0;
+  let spin = 0;
+  let balance = 12450;
+  let stake = 100;
+  let toast = { text:'', gold:false, until:0 };
+  let winBubble = { show:false, value:0, until:0, khan:false };
+
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  function tone(freq, dur, type='sine', gain=0.03, when=0) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    const now = audioCtx.currentTime + when;
+    o.type = type;
+    o.frequency.setValueAtTime(freq, now);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(gain, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(now);
+    o.stop(now + dur + 0.02);
+  }
+  function playShot() {
+    tone(320, 0.06, 'triangle', 0.028, 0);
+    tone(220, 0.12, 'sine', 0.018, 0.03);
+  }
+  function playImpact(gold=false) {
+    tone(gold ? 560 : 420, 0.05, 'square', gold ? 0.032 : 0.022, 0);
+    tone(gold ? 740 : 520, 0.08, 'triangle', gold ? 0.02 : 0.014, 0.02);
+  }
+  function playWin(khan=false) {
+    tone(520, 0.08, 'triangle', 0.03, 0.00);
+    tone(660, 0.10, 'triangle', 0.026, 0.10);
+    tone(khan ? 920 : 780, 0.14, 'sine', 0.03, 0.22);
+  }
+
+  const SCENARIOS = [
+    { n: 1, khan: false, w: 12 },
+    { n: 2, khan: false, w: 16 },
+    { n: 3, khan: false, w: 26 },
+    { n: 4, khan: false, w: 20 },
+    { n: 5, khan: false, w: 12 },
+    { n: 3, khan: true,  w: 7  },
+    { n: 4, khan: true,  w: 4  },
+    { n: 5, khan: true,  w: 3  }
+  ];
+
+  function chooseScenario() {
+    const total = SCENARIOS.reduce((a, b) => a + b.w, 0);
+    let r = Math.random() * total;
+    for (const s of SCENARIOS) {
+      r -= s.w;
+      if (r <= 0) return {
+        n: s.n,
+        khan: s.khan,
+        guided: false,
+        launched: false,
+        khanStarted: false,
+        targets: [],
+        forcedDone: false
+      };
+    }
+    return {
+      n: 3,
+      khan: false,
+      guided: false,
+      launched: false,
+      khanStarted: false,
+      targets: [],
+      forcedDone: false
+    };
+  }
+
+  function payoutByCount(n) {
+    if (n === 1) return 1;
+    if (n === 2) return 1.5;
+    if (n === 3) return 2;
+    if (n === 4) return 5;
+    if (n === 5) return 10;
+    return 0;
+  }
+  function totalMult(n, kh) {
+    const base = payoutByCount(n);
+    return kh ? base * 5 : base;
+  }
+  function fmtMoney(n) { return n.toLocaleString('ru-RU'); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function cubicPoint(t, p0, p1, p2, p3) {
+    const mt = 1 - t;
+    return mt*mt*mt*p0 + 3*mt*mt*t*p1 + 3*mt*t*t*p2 + t*t*t*p3;
+  }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    W = Math.round(r.width);
+    H = Math.round(r.height);
+    S = W / DESIGN_W;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  function makePiece(type, x, y) {
+    return {
+      type, x, y, vx: 0, vy: 0,
+      r: type === 'khan' ? 42 : 35,
+      mass: type === 'khan' ? 1.34 : 1,
+      angle: rand(-0.18, 0.18), angV: rand(-0.02, 0.02),
+      out: false, alpha: 1, targetWin: false,
+      img: type === 'khan' ? pick(khanImgs) : pick(chukoImgs),
+      teeter: null, rimGlow: 0
+    };
+  }
+  function makeSaka() {
+    return {
+      x: SAKA_START.x, y: SAKA_START.y, vx: 0, vy: 0,
+      r: 52, mass: 1.7, angle: 0, angV: 0,
+      lift: 0, shadowStretch: 1,
+      img: pick(sakaImgs)
+    };
+  }
+
+  function layoutCluster() {
+    pieces = [];
+    const khan = makePiece('khan', BOARD.cx + rand(-5, 5), BOARD.cy + rand(-5, 5));
+    pieces.push(khan);
+
+    const positions = [
+      {x:-78,y:-32}, {x:0,y:-42}, {x:77,y:-28},
+      {x:-104,y:28}, {x:-34,y:24}, {x:36,y:26}, {x:106,y:24},
+      {x:-70,y:84}, {x:0,y:88}, {x:70,y:82},
+      {x:-22,y:145}, {x:50,y:142}
+    ];
+    for (const pos of positions) {
+      const x = BOARD.cx + pos.x + rand(-7, 7);
+      const y = BOARD.cy + pos.y + rand(-7, 7);
+      pieces.push(makePiece('bone', x, y));
+    }
+  }
+
+  function resetRound() {
+    particles = [];
+    ripples = [];
+    confetti = [];
+    pointerId = null;
+    dragPoint = null;
+    flight = null;
+    state = 'ready';
+    scenario = chooseScenario();
+    knocked = 0;
+    khanOut = false;
+    resultShown = false;
+    finalizeAt = 0;
+    roundStartedAt = 0;
+    lastOutAt = 0;
+    resultDelayUntil = 0;
+    scorePulse = 0;
+    spin = 0;
+    toast.until = 0;
+    winBubble.show = false;
+    lastOutAt = 0;
+    resultDelayUntil = 0;
+    layoutCluster();
+    saka = makeSaka();
+  }
+
+  function pointFromEvent(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: (e.clientX - r.left) / S, y: (e.clientY - r.top) / S };
+  }
+  function hitRect(p, rect) {
+    return p.x >= rect.x - rect.w/2 && p.x <= rect.x + rect.w/2 &&
+           p.y >= rect.y - rect.h/2 && p.y <= rect.y + rect.h/2;
+  }
+
+  function spawnParticles(x, y, gold=false, count=16) {
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const sp = rand(18, 72);
+      particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: rand(600, 980), max: 980, r: rand(1.4, 3.8), gold
+      });
+    }
+  }
+  function spawnRipple(x, y, gold=false) {
+    ripples.push({
+      x, y, r: 8, maxR: gold ? 54 : 42, life: 0, maxLife: gold ? 560 : 420, gold
+    });
+  }
+  function showToast(text, gold=false) {
+    toast = { text, gold, until: performance.now() + 950 };
+  }
+  function showWinBubble(value, khan=false) {
+    winBubble = { show: true, value, khan, until: performance.now() + 1750 };
+  }
+  function spawnConfetti() {
+    for (let i = 0; i < 28; i++) {
+      confetti.push({
+        x: rand(250, 690), y: rand(190, 440),
+        vx: rand(-1.3, 1.3), vy: rand(0.8, 2.5),
+        s: rand(4, 8), rot: rand(0, Math.PI * 2), vr: rand(-0.08, 0.08),
+        life: rand(1200, 1700),
+        color: ['#DBE63C', '#FFE17F', '#77A7FF', '#D3DDE7'][Math.floor(Math.random() * 4)]
+      });
+    }
+  }
+
+  function markOut(p, gold=false) {
+    if (p.out) return;
+    p.out = true;
+    p.alpha = 1;
+    p.vx = 0;
+    p.vy = 0;
+    if (p.type === 'khan') {
+      khanOut = true;
+      playImpact(true);
+    } else {
+      knocked += 1;
+      playImpact(false);
+    }
+    lastOutAt = performance.now();
+    resultDelayUntil = lastOutAt + 560;
+    scorePulse = 1;
+    spawnParticles(p.x, p.y, gold, gold ? 20 : 16);
+    spawnRipple(p.x, p.y, gold);
+  }
+
+  function chooseTargets() {
+    if (scenario.guided) return;
+
+    const bones = pieces.filter(p => p.type === 'bone' && !p.out);
+
+    // Prefer the central cluster, then randomise slightly for visual variety.
+    bones.sort((a, b) =>
+      Math.hypot(a.x - BOARD.cx, a.y - BOARD.cy) -
+      Math.hypot(b.x - BOARD.cx, b.y - BOARD.cy)
+    );
+
+    const pool = bones.slice(0, Math.min(9, bones.length));
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    scenario.targets = pool.slice(0, scenario.n);
+    scenario.targets.forEach(p => {
+      p.targetWin = true;
+      p.ejectAnim = null;
+    });
+
+    scenario.guided = true;
+  }
+
+  function buildEjectAnim(piece, startAt, index=0, fast=false) {
+    // Direction is mostly radial, with a small tangential component.
+    let dx = piece.x - BOARD.cx;
+    let dy = piece.y - BOARD.cy;
+    let L = Math.hypot(dx, dy) || 1;
+    let dirX = dx / L;
+    let dirY = dy / L;
+
+    const tangentAmount = rand(-0.24, 0.24);
+    const tx = -dirY;
+    const ty = dirX;
+
+    dirX += tx * tangentAmount;
+    dirY += ty * tangentAmount;
+    L = Math.hypot(dirX, dirY) || 1;
+    dirX /= L;
+    dirY /= L;
+
+    const endDist = BOARD.innerR + rand(45, 62);
+    const ex = BOARD.cx + dirX * endDist;
+    const ey = BOARD.cy + dirY * endDist;
+
+    return {
+      startAt,
+      duration: fast ? rand(420, 500) : rand(610, 760),
+      started: false,
+      rimFx: false,
+      sx: piece.x,
+      sy: piece.y,
+      ex,
+      ey,
+      dirX,
+      dirY,
+      tangentX: tx,
+      tangentY: ty,
+      curve: rand(-24, 24),
+      startAngle: piece.angle,
+      spin: rand(-1.4, 1.4) * Math.PI,
+      index
+    };
+  }
+
+  function launchTargets(now) {
+    chooseTargets();
+    if (scenario.launched) return;
+    scenario.launched = true;
+
+    const ordered = [...scenario.targets].sort((a, b) => a.y - b.y);
+    ordered.forEach((p, i) => {
+      p.ejectAnim = buildEjectAnim(p, now + i * 110 + rand(0, 35), i, false);
+    });
+  }
+
+  function updateTargetEjections(now) {
+    if (!scenario.guided) return;
+
+    for (const p of scenario.targets) {
+      if (p.out || !p.ejectAnim) continue;
+
+      const a = p.ejectAnim;
+      if (now < a.startAt) continue;
+
+      if (!a.started) {
+        a.started = true;
+
+        // Capture the exact current position only once.
+        a.sx = p.x;
+        a.sy = p.y;
+
+        // Recalculate endpoint from the actual position at take-off.
+        let dx = p.x - BOARD.cx;
+        let dy = p.y - BOARD.cy;
+        let L = Math.hypot(dx, dy) || 1;
+        let dirX = dx / L;
+        let dirY = dy / L;
+
+        const tx = -dirY;
+        const ty = dirX;
+        const tangential = rand(-0.20, 0.20);
+
+        dirX += tx * tangential;
+        dirY += ty * tangential;
+        L = Math.hypot(dirX, dirY) || 1;
+        dirX /= L;
+        dirY /= L;
+
+        a.dirX = dirX;
+        a.dirY = dirY;
+        a.tangentX = tx;
+        a.tangentY = ty;
+
+        const endDist = BOARD.innerR + rand(46, 60);
+        a.ex = BOARD.cx + dirX * endDist;
+        a.ey = BOARD.cy + dirY * endDist;
+
+        p.vx = 0;
+        p.vy = 0;
+        p.angV = 0;
+
+        spawnParticles(p.x, p.y, false, 8);
+        spawnRipple(p.x, p.y, false);
+        playImpact(false);
+      }
+
+      const raw = Math.min(1, (now - a.startAt) / a.duration);
+      const t = easeOutCubic(raw);
+
+      // Smooth curved movement. No physics/second push is applied to these pieces.
+      const c1x = a.sx + a.dirX * 42 + a.tangentX * a.curve;
+      const c1y = a.sy + a.dirY * 42 + a.tangentY * a.curve;
+      const c2x = a.ex - a.dirX * 48 + a.tangentX * a.curve * 0.45;
+      const c2y = a.ey - a.dirY * 48 + a.tangentY * a.curve * 0.45;
+
+      p.x = cubicPoint(t, a.sx, c1x, c2x, a.ex);
+      p.y = cubicPoint(t, a.sy, c1y, c2y, a.ey);
+      p.angle = a.startAngle + a.spin * t;
+
+      // One visible rim-crossing effect.
+      if (!a.rimFx) {
+        const dPiece = Math.hypot(p.x - BOARD.cx, p.y - BOARD.cy);
+        if (dPiece > BOARD.innerR - p.r + 12) {
+          a.rimFx = true;
+          spawnParticles(p.x, p.y, false, 10);
+          spawnRipple(p.x, p.y, false);
+        }
+      }
+
+      if (raw >= 1) {
+        // Piece is already visibly outside. Marking it out does NOT move it again.
+        p.x = a.ex;
+        p.y = a.ey;
+        markOut(p, false);
+      }
+    }
+  }
+
+  function forceTargetsOut(now) {
+    // Safety no longer teleports or re-launches pieces.
+    // It only starts/accelerates the same one-shot animation.
+    if (!scenario.guided) chooseTargets();
+    if (!scenario.launched) launchTargets(now);
+
+    scenario.targets.forEach((p, i) => {
+      if (p.out) return;
+
+      if (!p.ejectAnim) {
+        p.ejectAnim = buildEjectAnim(p, now + i * 35, i, true);
+        return;
+      }
+
+      const a = p.ejectAnim;
+
+      if (!a.started) {
+        a.startAt = Math.min(a.startAt, now + i * 30);
+        a.duration = Math.min(a.duration, 500);
+      } else {
+        // If a browser frame was delayed, advance this SAME animation.
+        // Never create a second flight.
+        const elapsed = now - a.startAt;
+        if (elapsed > a.duration + 250) {
+          a.startAt = now - a.duration * 0.94;
+        }
+      }
+    });
+  }
+
+  function startKhanDrama(now) {
+    if (!scenario.khan || scenario.khanStarted) return;
+    scenario.khanStarted = true;
+    const kh = pieces.find(p => p.type === 'khan');
+    if (!kh || kh.out) return;
+    const ang = rand(-0.96, 0.96);
+    kh.teeter = {
+      state: 'approach', dirX: Math.cos(ang), dirY: Math.sin(ang),
+      edgeDist: BOARD.innerR - 42, start: now, approachEnd: now + 520,
+      teeterEnd: now + 1430, pushEnd: now + 1880, baseAngle: kh.angle
+    };
+    showToast('ХАН качнулся...', true);
+  }
+  function updateKhanDrama(now) {
+    const kh = pieces.find(p => p.type === 'khan');
+    if (!kh || !kh.teeter || kh.out) return;
+    const t = kh.teeter;
+    if (t.state === 'approach') {
+      const pr = Math.min(1, (now - t.start) / (t.approachEnd - t.start));
+      const eased = easeOutCubic(pr);
+      const d = 56 + (t.edgeDist - 56) * eased;
+      kh.x = BOARD.cx + t.dirX * d;
+      kh.y = BOARD.cy + t.dirY * d;
+      kh.angle = t.baseAngle + Math.sin(pr * Math.PI * 1.2) * 0.22;
+      kh.rimGlow = pr;
+      kh.vx = 0; kh.vy = 0; kh.angV = 0;
+      if (pr > 0.3 && !t.hit1) {
+        t.hit1 = true; spawnRipple(kh.x, kh.y, true); playImpact(true);
+      }
+      if (pr >= 1) t.state = 'teeter';
+      return;
+    }
+    if (t.state === 'teeter') {
+      const pr = Math.min(1, (now - t.approachEnd) / (t.teeterEnd - t.approachEnd));
+      const wob = Math.sin(pr * Math.PI * 8) * (1 - pr) * 14;
+      const outward = Math.sin(pr * Math.PI * 0.9) * 4;
+      const d = t.edgeDist - 1 + outward;
+      kh.x = BOARD.cx + t.dirX * d - t.dirY * wob * 0.15;
+      kh.y = BOARD.cy + t.dirY * d + t.dirX * wob * 0.15;
+      kh.angle = t.baseAngle + Math.sin(pr * Math.PI * 8) * 0.22 + pr * 0.18;
+      kh.rimGlow = 1;
+      kh.vx = 0; kh.vy = 0; kh.angV = 0;
+      if (pr > 0.44 && !t.sparked) {
+        t.sparked = true; spawnParticles(kh.x, kh.y, true, 12); spawnRipple(kh.x, kh.y, true);
+      }
+      if (pr >= 1) {
+        t.state = 'push'; showToast('ХАН!', true);
+      }
+      return;
+    }
+    if (t.state === 'push') {
+      const pr = Math.min(1, (now - t.teeterEnd) / (t.pushEnd - t.teeterEnd));
+      const d = (t.edgeDist - 1) + pr * 34;
+      kh.x = BOARD.cx + t.dirX * d;
+      kh.y = BOARD.cy + t.dirY * d;
+      kh.angle = t.baseAngle + 0.22 + pr * 0.4;
+      kh.rimGlow = 1 - pr * 0.18;
+      if (pr > 0.2 && !t.bump2) {
+        t.bump2 = true; spawnRipple(kh.x, kh.y, true); playImpact(true);
+      }
+      if (pr >= 1) {
+        kh.teeter = null;
+        kh.x = BOARD.cx + t.dirX * (BOARD.innerR + 46);
+        kh.y = BOARD.cy + t.dirY * (BOARD.innerR + 46);
+        markOut(kh, true);
+      }
+    }
+  }
+
+  function collide(a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const d = Math.hypot(dx, dy) || 0.0001;
+    const minD = a.r + b.r;
+    if (d >= minD) return false;
+
+    const nx = dx / d, ny = dy / d;
+    const overlap = minD - d;
+    const tm = a.mass + b.mass;
+
+    a.x -= nx * overlap * (b.mass / tm);
+    a.y -= ny * overlap * (b.mass / tm);
+    b.x += nx * overlap * (a.mass / tm);
+    b.y += ny * overlap * (a.mass / tm);
+
+    const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+    const vn = rvx * nx + rvy * ny;
+    if (vn > 0) return true;
+
+    const e = 0.82;
+    let j = -(1 + e) * vn;
+    j /= (1 / a.mass) + (1 / b.mass);
+
+    const ix = j * nx, iy = j * ny;
+    a.vx -= ix / a.mass; a.vy -= iy / a.mass;
+    b.vx += ix / b.mass; b.vy += iy / b.mass;
+    a.angV += rand(-0.025, 0.025);
+    b.angV += rand(-0.025, 0.025);
+
+    if (Math.abs(vn) > 2.6 && Math.random() < 0.18) {
+      spawnRipple((a.x + b.x) / 2, (a.y + b.y) / 2, false);
+      playImpact(false);
+    }
+    return true;
+  }
+
+  function finalizeResult() {
+    if (resultShown) return;
+
+    resultShown = true;
+    const mult = totalMult(knocked, khanOut);
+    const win = Math.round(stake * mult);
+    balance += win;
+    showWinBubble(win, khanOut);
+    spawnConfetti();
+    scorePulse = 1;
+    playWin(khanOut);
+  }
+
+  function beginShot(ux, uy, pwr) {
+    if (state !== 'ready') return;
+
+    // Mark the winning bones before physics starts, so accidental contacts
+    // cannot turn a guaranteed winning round into x0.
+    chooseTargets();
+
+    const ex = BOARD.cx + ux * 94;
+    const ey = BOARD.cy + uy * 88;
+
+    flight = {
+      t0: performance.now(),
+      dur: 900 + pwr * 180,
+      sx: saka.x, sy: saka.y,
+      c1x: saka.x + ux * 28, c1y: saka.y - 68 - pwr * 10,
+      c2x: (saka.x + ex) / 2 + ux * 42, c2y: Math.min(saka.y, ey) - 160 - pwr * 24,
+      ex, ey, ux, uy, pwr
+    };
+
+    state = 'flight';
+    roundStartedAt = performance.now();
+    finalizeAt = roundStartedAt + 5000;
+    showToast(pwr > 0.8 ? 'СИЛЬНЫЙ БРОСОК!' : 'МЕТКИЙ БРОСОК!', false);
+    playShot();
+  }
+
+  function throwByButton() {
+    if (state !== 'ready') return;
+    // Slightly different trajectory every time, but always toward the field.
+    const side = rand(-0.16, 0.16);
+    const ux = Math.sin(side);
+    const uy = -Math.cos(side);
+    const pwr = rand(0.80, 0.97);
+    beginShot(ux, uy, pwr);
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    ensureAudio();
+    const p = pointFromEvent(e);
+    if (hitRect(p, BTN)) {
+      if (state === 'ready') {
+        throwByButton();
+      } else if (state === 'settled') {
+        resetRound();
+      } else if (roundStartedAt && performance.now() - roundStartedAt > 8000) {
+        // Emergency recovery: never make the player reload the page.
+        resetRound();
+      }
+      return;
+    }
+    if (!assetsReady || state !== 'ready') return;
+    if (Math.hypot(p.x - saka.x, p.y - saka.y) <= saka.r + 25) {
+      pointerId = e.pointerId;
+      canvas.setPointerCapture(pointerId);
+      dragPoint = p;
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pointerId || !dragPoint || state !== 'ready') return;
+    const p = pointFromEvent(e);
+    const dx = p.x - SAKA_START.x;
+    const dy = p.y - SAKA_START.y;
+    const maxLen = 100;
+    const len = Math.min(maxLen, Math.hypot(dx, dy));
+    const ang = Math.atan2(dy, dx);
+
+    let x = SAKA_START.x + Math.cos(ang) * len;
+    let y = SAKA_START.y + Math.sin(ang) * len;
+    y = Math.min(y, 1085);
+    y = Math.max(y, 980);
+    x = Math.max(190, Math.min(750, x));
+
+    saka.x = x;
+    saka.y = y;
+    saka.angle = dx * 0.0042;
+    dragPoint = { x, y };
+  });
+
+  function releaseShot(e) {
+    if (e.pointerId !== pointerId || !dragPoint || state !== 'ready') return;
+    const dx = dragPoint.x - SAKA_START.x;
+    const dy = dragPoint.y - SAKA_START.y;
+    const len = Math.hypot(dx, dy);
+    pointerId = null;
+    dragPoint = null;
+
+    if (len < 10) {
+      saka.x = SAKA_START.x;
+      saka.y = SAKA_START.y;
+      return;
+    }
+
+    const ux = -dx / len, uy = -dy / len;
+    const pwr = Math.min(1, len / 100);
+    beginShot(ux, uy, pwr);
+  }
+  canvas.addEventListener('pointerup', releaseShot);
+  canvas.addEventListener('pointercancel', releaseShot);
+
+  function startRoll() {
+    const speed = 8.8 + flight.pwr * 14.5;
+    saka.x = flight.ex; saka.y = flight.ey;
+    saka.vx = flight.ux * speed; saka.vy = flight.uy * speed;
+    saka.angV = (flight.ux > 0 ? 1 : -1) * (0.07 + flight.pwr * 0.03);
+    state = 'roll';
+    spawnParticles(saka.x, saka.y, false, 10);
+    spawnRipple(saka.x, saka.y, false);
+  }
+
+  function step(dt, now) {
+    if (!assetsReady) return;
+
+    spin += dt * 0.002;
+    scorePulse = Math.max(0, scorePulse - dt * 0.002);
+
+    if (state === 'flight' && flight) {
+      const raw = Math.min(1, (now - flight.t0) / flight.dur);
+      const t = easeOutCubic(raw);
+
+      saka.x = cubicPoint(t, flight.sx, flight.c1x, flight.c2x, flight.ex);
+      saka.y = cubicPoint(t, flight.sy, flight.c1y, flight.c2y, flight.ey);
+      saka.lift = Math.sin(raw * Math.PI) * (42 + flight.pwr * 24);
+      saka.shadowStretch = 1 + Math.sin(raw * Math.PI) * 0.36;
+      saka.angle += 0.095 + flight.pwr * 0.035;
+
+      if (raw >= 1) startRoll();
+      return;
+    }
+
+    if (state !== 'roll') return;
+
+    // One-shot target ejection starts after SAKA has hit the group.
+    if (now > flight.t0 + 980 && !scenario.launched) {
+      launchTargets(now);
+    }
+
+    if (now > flight.t0 + 1540) {
+      startKhanDrama(now);
+    }
+
+    // Update the one and only animation for each winning chuko.
+    updateTargetEjections(now);
+
+    // Safety only speeds up existing animations; it never launches a second flight.
+    if (now > roundStartedAt + 3000 && !scenario.targets.every(p => p.out)) {
+      forceTargetsOut(now);
+    }
+
+    // Physics excludes a winning chuko from the moment its eject animation starts.
+    const activeMovers = [
+      saka,
+      ...pieces.filter(p => {
+        if (p.out) return false;
+        if (p.type === 'khan' && p.teeter) return false;
+        if (p.type === 'bone' && p.targetWin && p.ejectAnim && p.ejectAnim.started) return false;
+        return true;
+      })
+    ];
+
+    for (const p of activeMovers) {
+      p.x += p.vx * dt * 0.06;
+      p.y += p.vy * dt * 0.06;
+      p.angle += p.angV * dt * 0.06;
+
+      const fr = p === saka ? 0.992 : 0.989;
+      p.vx *= Math.pow(fr, dt);
+      p.vy *= Math.pow(fr, dt);
+      p.angV *= Math.pow(0.993, dt);
+    }
+
+    for (let i = 0; i < activeMovers.length; i++) {
+      for (let j = i + 1; j < activeMovers.length; j++) {
+        collide(activeMovers[i], activeMovers[j]);
+      }
+    }
+
+    updateKhanDrama(now);
+
+    // Rim handling applies only to pieces NOT controlled by the one-shot fly-out animation.
+    for (const p of pieces) {
+      if (p.out) continue;
+      if (p.type === 'khan' && p.teeter) continue;
+      if (p.type === 'bone' && p.targetWin && p.ejectAnim && p.ejectAnim.started) continue;
+
+      const dPiece = Math.hypot(p.x - BOARD.cx, p.y - BOARD.cy);
+      const rimLimit = BOARD.innerR - p.r + 10;
+
+      // Before a winning chuko starts its animation, keep it inside.
+      // Non-winning chuko always remain inside.
+      if (dPiece > rimLimit) {
+        if (p.type === 'khan' && scenario.khan) {
+          // KHAN exit is controlled only by the KHAN drama.
+        } else {
+          const nx = (p.x - BOARD.cx) / (dPiece || 1);
+          const ny = (p.y - BOARD.cy) / (dPiece || 1);
+
+          p.x = BOARD.cx + nx * (rimLimit - 4);
+          p.y = BOARD.cy + ny * (rimLimit - 4);
+
+          const dot = p.vx * nx + p.vy * ny;
+          p.vx -= 1.7 * dot * nx;
+          p.vy -= 1.7 * dot * ny;
+          p.vx *= 0.62;
+          p.vy *= 0.62;
+        }
+      }
+    }
+
+    // SAKA always bounces inside the circle.
+    const d = Math.hypot(saka.x - BOARD.cx, saka.y - BOARD.cy);
+    const maxD = BOARD.innerR - saka.r + 10;
+
+    if (d > maxD) {
+      const nx = (saka.x - BOARD.cx) / (d || 1);
+      const ny = (saka.y - BOARD.cy) / (d || 1);
+
+      saka.x = BOARD.cx + nx * maxD;
+      saka.y = BOARD.cy + ny * maxD;
+
+      const dot = saka.vx * nx + saka.vy * ny;
+      saka.vx -= 2 * dot * nx;
+      saka.vy -= 2 * dot * ny;
+      saka.vx *= 0.82;
+      saka.vy *= 0.82;
+
+      spawnRipple(saka.x, saka.y, false);
+    }
+
+    // KHAN hard safety: finish the SAME KHAN sequence, not a second animation.
+    if (scenario.khan && !khanOut && now > roundStartedAt + 5600) {
+      const kh = pieces.find(p => p.type === 'khan');
+      if (kh && !kh.out) {
+        const dx = kh.x - BOARD.cx || 1;
+        const dy = kh.y - BOARD.cy;
+        const L = Math.hypot(dx, dy) || 1;
+
+        kh.teeter = null;
+        kh.x = BOARD.cx + (dx / L) * (BOARD.innerR + 48);
+        kh.y = BOARD.cy + (dy / L) * (BOARD.innerR + 48);
+        markOut(kh, true);
+      }
+    }
+
+    const targetsDone =
+      scenario.targets.length === scenario.n &&
+      scenario.targets.every(p => p.out);
+
+    const outcomeDone =
+      targetsDone &&
+      (!scenario.khan || khanOut);
+
+    // Critical ordering:
+    // 1. all selected chuko finish their one flight;
+    // 2. KHAN finishes, if applicable;
+    // 3. short visual pause;
+    // 4. only then show the win.
+    if (
+      outcomeDone &&
+      !resultShown &&
+      now > Math.max(resultDelayUntil, lastOutAt + 520)
+    ) {
+      state = 'settled';
+      saka.vx = 0;
+      saka.vy = 0;
+      finalizeResult();
+      return;
+    }
+
+    // Absolute safety timeout. It can only accelerate unfinished one-shot animations.
+    if (!resultShown && roundStartedAt && now > roundStartedAt + 7200) {
+      forceTargetsOut(now);
+
+      if (scenario.khan && !khanOut) {
+        const kh = pieces.find(p => p.type === 'khan');
+        if (kh && !kh.out) {
+          const dx = kh.x - BOARD.cx || 1;
+          const dy = kh.y - BOARD.cy;
+          const L = Math.hypot(dx, dy) || 1;
+
+          kh.teeter = null;
+          kh.x = BOARD.cx + (dx / L) * (BOARD.innerR + 48);
+          kh.y = BOARD.cy + (dy / L) * (BOARD.innerR + 48);
+          markOut(kh, true);
+        }
+      }
+    }
+  }
+
+  function rr(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawImageCentered(im, x, y, size, angle=0, alpha=1, shadow=true) {
+    if (!im || !im.complete) return;
+    const xx = x * S, yy = y * S, ss = size * S;
+    ctx.save();
+    ctx.translate(xx, yy);
+    ctx.rotate(angle);
+    ctx.globalAlpha = alpha;
+    if (shadow) {
+      ctx.shadowColor = 'rgba(0,0,0,.42)';
+      ctx.shadowBlur = 14 * S;
+      ctx.shadowOffsetY = 8 * S;
+    }
+    ctx.drawImage(im, -ss / 2, -ss / 2, ss, ss);
+    ctx.restore();
+  }
+  function drawHalo(x, y, r, c1, c2) {
+    const g = ctx.createRadialGradient(x * S, y * S, 0, x * S, y * S, r * S);
+    g.addColorStop(0, c1);
+    g.addColorStop(1, c2);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x * S, y * S, r * S, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawBackground() {
+    if (bg.complete) ctx.drawImage(bg, 0, 0, W, H);
+  }
+  function drawCleanLowerArea() {
+    ctx.save();
+
+    // Narrow score strip: below SAKA and below the win table.
+    const scoreBg = ctx.createLinearGradient(0, CLEAN_SCORE.y * S, 0, (CLEAN_SCORE.y + CLEAN_SCORE.h) * S);
+    scoreBg.addColorStop(0, 'rgba(5,23,57,.985)');
+    scoreBg.addColorStop(1, 'rgba(4,18,44,.995)');
+    ctx.fillStyle = scoreBg;
+    rr(CLEAN_SCORE.x * S, CLEAN_SCORE.y * S, CLEAN_SCORE.w * S, CLEAN_SCORE.h * S, 24 * S);
+    ctx.fill();
+
+    for (const cell of SCORE_CELLS) {
+      const x = (cell.x - cell.w / 2) * S;
+      const y = (SCORE_Y - 54) * S;
+      const w = cell.w * S;
+      const h = 110 * S;
+      const cg = ctx.createLinearGradient(0, y, 0, y + h);
+      cg.addColorStop(0, 'rgba(8,31,73,.995)');
+      cg.addColorStop(1, 'rgba(4,20,48,.995)');
+      ctx.fillStyle = cg;
+      rr(x, y, w, h, 24 * S);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(211,221,231,.15)';
+      ctx.lineWidth = 1.2 * S;
+      rr(x, y, w, h, 24 * S);
+      ctx.stroke();
+    }
+
+    // Only the button zone is repainted — no large plate over SAKA/table.
+    const bg2 = ctx.createLinearGradient(0, CLEAN_BUTTON.y * S, 0, (CLEAN_BUTTON.y + CLEAN_BUTTON.h) * S);
+    bg2.addColorStop(0, 'rgba(5,21,52,.99)');
+    bg2.addColorStop(1, 'rgba(4,17,42,.995)');
+    ctx.fillStyle = bg2;
+    rr(CLEAN_BUTTON.x * S, CLEAN_BUTTON.y * S, CLEAN_BUTTON.w * S, CLEAN_BUTTON.h * S, 24 * S);
+    ctx.fill();
+
+    const btnGrad = ctx.createLinearGradient(0, (BTN.y - BTN.h/2) * S, 0, (BTN.y + BTN.h/2) * S);
+    btnGrad.addColorStop(0, 'rgba(47,76,191,.98)');
+    btnGrad.addColorStop(0.45, 'rgba(27,53,144,.99)');
+    btnGrad.addColorStop(1, 'rgba(12,31,94,.99)');
+    ctx.fillStyle = btnGrad;
+    rr((BTN.x - BTN.w/2) * S, (BTN.y - BTN.h/2) * S, BTN.w * S, BTN.h * S, 32 * S);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(230,235,255,.42)';
+    ctx.lineWidth = 2 * S;
+    rr((BTN.x - BTN.w/2 + 3) * S, (BTN.y - BTN.h/2 + 3) * S, (BTN.w - 6) * S, (BTN.h - 6) * S, 30 * S);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawTrail() {
+    if (state !== 'flight' || !flight) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(219,230,60,.38)';
+    ctx.lineWidth = 4 * S;
+    ctx.setLineDash([10 * S, 12 * S]);
+    ctx.beginPath();
+    for (let i = 0; i <= 24; i++) {
+      const tt = i / 24;
+      const x = cubicPoint(tt, flight.sx, flight.c1x, flight.c2x, flight.ex);
+      const y = cubicPoint(tt, flight.sy, flight.c1y, flight.c2y, flight.ey) - Math.sin(tt * Math.PI) * (18 + flight.pwr * 10);
+      if (i === 0) ctx.moveTo(x * S, y * S);
+      else ctx.lineTo(x * S, y * S);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawAimGuide() {
+    if (state !== 'ready' || !dragPoint) return;
+    const dx = SAKA_START.x - dragPoint.x;
+    const dy = SAKA_START.y - dragPoint.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 6) return;
+    const ux = dx / len, uy = dy / len;
+    const power = Math.min(1, len / 100);
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,.75)';
+    ctx.lineWidth = 5 * S;
+    ctx.setLineDash([14 * S, 10 * S]);
+    ctx.beginPath();
+    ctx.moveTo(SAKA_START.x * S, (SAKA_START.y - 46) * S);
+    ctx.lineTo((SAKA_START.x + ux * (62 + power * 62)) * S, (SAKA_START.y + uy * (62 + power * 62) - 46) * S);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPieces() {
+    for (const p of pieces.filter(p => p.type === 'bone' && p.out)) {
+      drawImageCentered(p.img, p.x, p.y, 132, p.angle, p.alpha, true);
+    }
+    for (const p of pieces.filter(p => p.type === 'bone' && !p.out)) {
+      drawImageCentered(p.img, p.x, p.y, 132, p.angle, 1, true);
+    }
+
+    const kh = pieces.find(p => p.type === 'khan');
+    if (kh) {
+      const glow = kh.teeter ? 1 : 0.56 + Math.sin(spin * 4) * 0.14;
+      drawHalo(kh.x, kh.y, 66 + glow * 7, `rgba(255,205,70,${0.16 + glow * 0.2})`, 'rgba(255,205,70,0)');
+      if (kh.rimGlow > 0) {
+        drawHalo(kh.x, kh.y, 84 + Math.sin(spin * 10) * 4, `rgba(255,230,120,${0.12 + kh.rimGlow * 0.18})`, 'rgba(255,230,120,0)');
+      }
+      drawImageCentered(kh.img, kh.x, kh.y, 148, kh.angle, kh.alpha, true);
+    }
+
+    if (!saka) return;
+    if (state === 'flight') {
+      ctx.save();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = '#000';
+      ctx.beginPath();
+      ctx.ellipse(saka.x * S, (saka.y + 28 + saka.lift * 0.62) * S, 42 * S * saka.shadowStretch, 13 * S, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      drawImageCentered(saka.img, saka.x, saka.y - saka.lift, 174, saka.angle, 1, false);
+    } else {
+      drawImageCentered(saka.img, saka.x, saka.y, 174, saka.angle, 1, true);
+    }
+  }
+
+  function drawParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      p.x += p.vx * dt * 0.06;
+      p.y += p.vy * dt * 0.06;
+      if (p.life <= 0) { particles.splice(i, 1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fillStyle = p.gold ? '#FFE17F' : '#FFF1BF';
+      ctx.beginPath();
+      ctx.arc(p.x * S, p.y * S, p.r * S, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  function drawRipples(dt) {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.life += dt;
+      if (r.life >= r.maxLife) { ripples.splice(i, 1); continue; }
+      const t = r.life / r.maxLife;
+      const rr0 = r.r + (r.maxR - r.r) * t;
+      ctx.save();
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = r.gold ? 'rgba(255,225,120,.75)' : 'rgba(255,255,255,.38)';
+      ctx.lineWidth = (r.gold ? 3 : 2) * S * (1 - t * 0.45);
+      ctx.beginPath();
+      ctx.arc(r.x * S, r.y * S, rr0 * S, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  function drawConfetti(dt) {
+    for (let i = confetti.length - 1; i >= 0; i--) {
+      const c = confetti[i];
+      c.life -= dt;
+      c.x += c.vx * dt * 0.06;
+      c.y += c.vy * dt * 0.06;
+      c.rot += c.vr * dt * 0.03;
+      if (c.life <= 0) { confetti.splice(i, 1); continue; }
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, c.life / 1700);
+      ctx.translate(c.x * S, c.y * S);
+      ctx.rotate(c.rot);
+      ctx.fillStyle = c.color;
+      ctx.fillRect(-(c.s * S) / 2, -(c.s * S) / 2, c.s * S, c.s * S * 0.74);
+      ctx.restore();
+    }
+  }
+
+  function drawHud() {
+    drawCleanLowerArea();
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `800 ${24*S}px Inter, sans-serif`;
+    ctx.fillText(fmtMoney(balance) + ' сом', 503 * S, 78 * S);
+    ctx.fillText(stake + ' сом', 785 * S, 78 * S);
+    ctx.restore();
+
+    for (const cell of SCORE_CELLS) {
+      ctx.save();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#B7C9DE';
+      ctx.font = `700 ${18*S}px Inter, sans-serif`;
+      ctx.fillText(cell.label, cell.x * S, (SCORE_Y - 22) * S);
+
+      let value = '', color = '#ffffff';
+      if (cell.label === 'ВЫБИТО') {
+        value = String(knocked); color = '#ffffff';
+      } else if (cell.label === 'МНОЖИТЕЛЬ') {
+        value = 'x' + totalMult(knocked, khanOut); color = '#DBE63C';
+      } else {
+        value = khanOut ? 'x5' : 'УСТОЯЛ'; color = '#FFD45D';
+      }
+
+      const pulse = 1 + scorePulse * 0.12;
+      ctx.fillStyle = color;
+      ctx.font = `900 ${(42*pulse)*S}px Inter, sans-serif`;
+      ctx.fillText(value, cell.x * S, (SCORE_Y + 27) * S);
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `900 ${34*S}px Inter, sans-serif`;
+    const buttonLabel =
+      state === 'settled' ? 'Новая игра' :
+      state === 'ready' ? 'Сделать бросок' :
+      'Бросок...';
+    ctx.fillText(buttonLabel, BTN.x * S, BTN.y * S + 2 * S);
+    ctx.restore();
+
+    if (toast.until > performance.now()) {
+      ctx.save();
+      const tw = 260 * S, th = 58 * S, tx = 470.5 * S - tw / 2, ty = 1130 * S - th / 2;
+      ctx.fillStyle = 'rgba(6,24,58,.98)';
+      ctx.strokeStyle = toast.gold ? 'rgba(255,225,127,.44)' : 'rgba(255,255,255,.12)';
+      ctx.lineWidth = 1.2 * S;
+      rr(tx, ty, tw, th, 18 * S);
+      ctx.fill();
+      rr(tx, ty, tw, th, 18 * S);
+      ctx.stroke();
+      ctx.fillStyle = toast.gold ? '#FFE17F' : '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `900 ${22*S}px Inter, sans-serif`;
+      ctx.fillText(toast.text, 470.5 * S, 1130 * S + 1 * S);
+      ctx.restore();
+    }
+
+    if (winBubble.show && winBubble.until > performance.now()) {
+      drawHalo(470.5, 935, 155, `rgba(255,220,110,${winBubble.khan ? 0.24 : 0.14})`, 'rgba(255,220,110,0)');
+      ctx.save();
+      const pw = 356 * S, ph = 172 * S, x = 470.5 * S - pw / 2, y = 850 * S;
+      ctx.fillStyle = 'rgba(8,31,73,.97)';
+      ctx.strokeStyle = 'rgba(255,255,255,.18)';
+      ctx.lineWidth = 1.2 * S;
+      rr(x, y, pw, ph, 22 * S);
+      ctx.fill();
+      rr(x, y, pw, ph, 22 * S);
+      ctx.stroke();
+
+      const progress = Math.min(1, (1750 - (winBubble.until - performance.now())) / 900);
+      const current = Math.round(winBubble.value * (1 - Math.pow(1 - progress, 3)));
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#B9CBE0';
+      ctx.font = `900 ${16*S}px Inter, sans-serif`;
+      ctx.fillText(winBubble.khan ? 'ХАН' : 'ВЫИГРЫШ', 470.5 * S, 884 * S);
+      ctx.fillStyle = winBubble.khan ? '#FFE17F' : '#ffffff';
+      ctx.font = `900 ${28*S}px Inter, sans-serif`;
+      ctx.fillText(winBubble.khan ? 'ХАН выбит!' : 'Выигрыш!', 470.5 * S, 923 * S);
+      ctx.fillStyle = '#DBE63C';
+      ctx.font = `1000 ${40*S}px Inter, sans-serif`;
+      ctx.fillText(fmtMoney(current) + ' сом', 470.5 * S, 978 * S);
+      ctx.restore();
+    }
+  }
+
+  function bootWhenReady() {
+    const allRaw = [bg, ...rawChuko, ...rawKhan, ...rawSaka];
+    let loaded = 0;
+    function onLoad() {
+      loaded++;
+      if (loaded !== allRaw.length) return;
+      chukoImgs = rawChuko.map(i => padImage(i, 0.25));
+      khanImgs = rawKhan.map(i => padImage(i, 0.20));
+      sakaImgs = rawSaka.map(i => padImage(i, 0.20));
+      assetsReady = true;
+      resize();
+      resetRound();
+      requestAnimationFrame(render);
+    }
+    for (const im of allRaw) {
+      if (im.complete) onLoad();
+      else im.onload = onLoad;
+    }
+  }
+
+  function render(now=0) {
+    const dt = lastTime ? Math.min(40, now - lastTime) : 16;
+    lastTime = now;
+
+    step(dt, now);
+
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+    drawTrail();
+    drawAimGuide();
+    drawPieces();
+    drawRipples(dt);
+    drawParticles(dt);
+    drawConfetti(dt);
+    drawHud();
+
+    requestAnimationFrame(render);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+  bootWhenReady();
+})();
+</script>
+</body>
+</html>
