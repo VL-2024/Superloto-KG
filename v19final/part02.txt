@@ -1,0 +1,361 @@
+Allowed);
+
+  let stake = Number(URL_PARAMS.get('denomination') || GAME_CFG.denomination || 100);
+  let selectorOpen = null; // 'stake' | null
+  let toast = { text:'', gold:false, until:0 };
+  let winBubble = { show:false, value:0, until:0, khan:false };
+
+  let audioCtx = null;
+  function ensureAudio() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    }
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  }
+  function tone(freq, dur, type='sine', gain=0.03, when=0) {
+    if (!audioCtx) return;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    const now = audioCtx.currentTime + when;
+    o.type = type;
+    o.frequency.setValueAtTime(freq, now);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(gain, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g).connect(audioCtx.destination);
+    o.start(now);
+    o.stop(now + dur + 0.02);
+  }
+  function playShot() {
+    tone(320, 0.06, 'triangle', 0.028, 0);
+    tone(220, 0.12, 'sine', 0.018, 0.03);
+  }
+  function playImpact(gold=false) {
+    tone(gold ? 560 : 420, 0.05, 'square', gold ? 0.032 : 0.022, 0);
+    tone(gold ? 740 : 520, 0.08, 'triangle', gold ? 0.02 : 0.014, 0.02);
+  }
+  function playWin(khan=false) {
+    tone(520, 0.08, 'triangle', 0.03, 0.00);
+    tone(660, 0.10, 'triangle', 0.026, 0.10);
+    tone(khan ? 920 : 780, 0.14, 'sine', 0.03, 0.22);
+  }
+
+  function scenarioFromLms(id) {
+    const scenarioId = Number(id);
+    const map = {
+      1: { n: 0, khan: false },
+      2: { n: 1, khan: false },
+      3: { n: 2, khan: false },
+      4: { n: 5, khan: false },
+      5: { n: 5, khan: true  }
+    };
+    const base = map[scenarioId];
+    if (!base) throw new Error('UNKNOWN_SCENARIO:' + scenarioId);
+
+    return {
+      id: scenarioId,
+      n: base.n,
+      khan: base.khan,
+      guided: false,
+      launched: false,
+      khanStarted: false,
+      targets: [],
+      forcedDone: false
+    };
+  }
+
+  function emptyScenario() {
+    return {
+      id: null,
+      n: 0,
+      khan: false,
+      guided: false,
+      launched: false,
+      khanStarted: false,
+      targets: [],
+      forcedDone: false
+    };
+  }
+
+  // Money is server-authoritative. The client never calculates the prize.
+  // multiplier is display-only: LMS may return it explicitly; otherwise win/stake is used.
+  function totalMult() {
+    if (!ticket || !scenario) return 0;
+    const completed = resultShown ||
+      (knocked >= scenario.n && (!scenario.khan || khanOut));
+    return completed ? serverMultiplier : 0;
+  }
+
+  function fmtMultiplier(n) {
+    const x = Number(n || 0);
+    if (Number.isInteger(x)) return String(x);
+    return String(Math.round(x * 100) / 100).replace('.', ',');
+  }
+
+  function fmtMoney(n) { return n == null ? '—' : Number(n).toLocaleString('ru-RU', {maximumFractionDigits: 2}); }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function cubicPoint(t, p0, p1, p2, p3) {
+    const mt = 1 - t;
+    return mt*mt*mt*p0 + 3*mt*mt*t*p1 + 3*mt*t*t*p2 + t*t*t*p3;
+  }
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    W = Math.round(r.width);
+    H = Math.round(r.height);
+    S = W / DESIGN_W;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+
+  function makePiece(type, x, y) {
+    return {
+      type, x, y, vx: 0, vy: 0,
+      r: type === 'khan' ? 42 : 35,
+      mass: type === 'khan' ? 1.34 : 1,
+      angle: rand(-0.18, 0.18), angV: rand(-0.02, 0.02),
+      out: false, alpha: 1, targetWin: false,
+      img: type === 'khan' ? pick(khanImgs) : pick(chukoImgs),
+      teeter: null, rimGlow: 0
+    };
+  }
+  function makeSaka() {
+    return {
+      x: SAKA_START.x, y: SAKA_START.y, vx: 0, vy: 0,
+      r: 52, mass: 1.7, angle: 0, angV: 0,
+      lift: 0, shadowStretch: 1,
+      img: pick(sakaImgs)
+    };
+  }
+
+  function layoutCluster() {
+    pieces = [];
+    const khan = makePiece('khan', BOARD.cx + rand(-5, 5), BOARD.cy + rand(-5, 5));
+    pieces.push(khan);
+
+    const positions = [
+      {x:-78,y:-32}, {x:0,y:-42}, {x:77,y:-28},
+      {x:-104,y:28}, {x:-34,y:24}, {x:36,y:26}, {x:106,y:24},
+      {x:-70,y:84}, {x:0,y:88}, {x:70,y:82},
+      {x:-22,y:145}, {x:50,y:142}
+    ];
+    for (const pos of positions) {
+      const x = BOARD.cx + pos.x + rand(-7, 7);
+      const y = BOARD.cy + pos.y + rand(-7, 7);
+      pieces.push(makePiece('bone', x, y));
+    }
+  }
+
+  function resetRound() {
+    particles = [];
+    ripples = [];
+    confetti = [];
+    pointerId = null;
+    dragPoint = null;
+    flight = null;
+
+    ticket = null;
+    pendingBalance = null;
+    serverWin = 0;
+    serverMultiplier = 0;
+    scenario = emptyScenario();
+
+    knocked = 0;
+    khanOut = false;
+    resultShown = false;
+    finalizeAt = 0;
+    roundStartedAt = 0;
+    lastOutAt = 0;
+    resultDelayUntil = 0;
+    scorePulse = 0;
+    spin = 0;
+    toast.until = 0;
+    winBubble.show = false;
+
+    state = 'idle';
+    layoutCluster();
+    saka = makeSaka();
+  }
+
+  function applyGameSettings(settings = {}) {
+    // language and currency are authoritative LMS settings.
+    language = normalizeLanguage(settings.language || language);
+    currency = String(settings.currency || currency || 'KGS').toUpperCase();
+    currencyDisplay = String(
+      settings.currencyDisplay ||
+      settings.currencyLabel ||
+      settings.currencySymbol ||
+      currency
+    );
+
+    gameMode = String(settings.mode || gameMode || 'real').toLowerCase() === 'demo'
+      ? 'demo'
+      : 'real';
+    demoAllowed = Boolean(settings.demoAllowed);
+
+    if (Number.isFinite(Number(settings.demoBalance))) {
+      demoBalance = Number(settings.demoBalance);
+    }
+
+    // LMS is authoritative. Demo cannot be active unless LMS permits it.
+    if (!demoAllowed && gameMode === 'demo') {
+      gameMode = 'real';
+    }
+
+    if (Array.isArray(settings.denominations) && settings.denominations.length) {
+      denominations = settings.denominations
+        .map(Number)
+        .filter(n => Number.isFinite(n) && n > 0);
+    }
+
+    const allowed = currentDenominations();
+    const requestedStake = Number(settings.denomination ?? stake);
+    stake = allowed.includes(requestedStake)
+      ? requestedStake
+      : (allowed[0] || requestedStake || 100);
+
+    selectorOpen = null;
+  }
+
+  async function refreshBalance() {
+    state = 'loading';
+
+    try {
+      if (gameMode === 'demo') {
+        balance = demoBalance;
+        state = 'idle';
+
+        window.X2LMS.emit('X2_GAME_BALANCE_LOADED', {
+          gameId: GAME_ID,
+          balance,
+          currency,
+          currencyDisplay,
+          language,
+          denominations: currentDenominations(),
+          mode: gameMode
+        });
+        return;
+      }
+
+      const data = await window.X2LMS.getBalance({currency});
+      realBalance = Number(data.balance);
+      balance = realBalance;
+
+      if (data.currency) currency = String(data.currency).toUpperCase();
+      if (data.currencyDisplay || data.currencyLabel || data.currencySymbol) {
+        currencyDisplay = String(
+          data.currencyDisplay ||
+          data.currencyLabel ||
+          data.currencySymbol
+        );
+      }
+
+      state = 'idle';
+
+      window.X2LMS.emit('X2_GAME_BALANCE_LOADED', {
+        gameId: GAME_ID,
+        balance,
+        currency,
+        currencyDisplay,
+        language,
+        denominations: currentDenominations(),
+        mode: gameMode
+      });
+    } catch (err) {
+      console.error('[CHUKO] balance load failed', err);
+      state = 'error';
+      showToast(tr('balanceError'), false);
+
+      if (window.X2LMS) {
+        window.X2LMS.emit('X2_GAME_ERROR', {
+          stage: 'balance',
+          code: err.code || 'BALANCE_ERROR',
+          message: err.message || String(err)
+        });
+      }
+    }
+  }
+
+  async function initializeLms() {
+    state = 'loading';
+    try {
+      if (!window.X2LMS) throw new Error('LMS_ADAPTER_NOT_LOADED');
+
+      const settings = await window.X2LMS.getGameSettings();
+      applyGameSettings(settings);
+      await refreshBalance();
+    } catch (err) {
+      console.error('[CHUKO] LMS init failed', err);
+      state = 'error';
+      showToast(tr('balanceError'), false);
+      if (window.X2LMS) {
+        window.X2LMS.emit('X2_GAME_ERROR', {
+          stage: 'init',
+          code: err.code || 'INIT_ERROR',
+          message: err.message || String(err)
+        });
+      }
+    }
+  }
+
+  function selectDenomination(value) {
+    if (!['idle','settled'].includes(state)) return;
+    const n = Number(value);
+    if (!currentDenominations().includes(n)) return;
+
+    stake = n;
+    selectorOpen = null;
+
+    window.X2LMS.emit('X2_GAME_DENOMINATION_CHANGED', {
+      gameId: GAME_ID,
+      denomination: stake,
+      currency,
+      language
+    });
+  }
+
+  function requestDeposit() {
+    if (!window.X2LMS) return;
+
+    window.X2LMS.emit('X2_GAME_DEPOSIT_REQUEST', {
+      gameId: GAME_ID,
+      mode: gameMode,
+      currency,
+      denomination: stake,
+      language,
+      balance
+    });
+  }
+
+  async function setGameMode(nextMode) {
+    if (!demoAllowed) return;
+    if (!['idle', 'settled'].includes(state)) return;
+
+    const normalized = String(nextMode || '').toLowerCase() === 'demo' ? 'demo' : 'real';
+    if (normalized === gameMode) return;
+
+    gameMode = normalized;
+    selectorOpen = null;
+    winBubble.show = false;
+
+    window.X2LMS.emit('X2_GAME_MODE_CHANGED', {
+      gameId: GAME_ID,
+      mode: gameMode,
+      currency,
+      language,
+      denomination: stake
+    });
+
+    await refreshBalance();
+  }
+
+
+  async function requestNewGame() {
+    if (state !== 'idle' && state !== 'settled' && state !== 'error') return;
+    state = 'requesting';
+    winBubble.show = false;
+
+    t
