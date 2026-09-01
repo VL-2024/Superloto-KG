@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="format-detection" content="telephone=no">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>ЧҮКӨ — demo v9</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #041a41; font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+  body { display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
+  .app { width: min(100vw, 560px); }
+  .stage { position: relative; width: 100%; aspect-ratio: 941 / 1672; overflow: hidden; touch-action: none; user-select: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage" id="stage">
+    <canvas id="c"></canvas>
+  </div>
+</div>
+
+<script>
+/*
+  X2 LOTO / ЧҮКӨ — LMS integration config v19
+
+  LMS controls:
+  - language
+  - currency / currencyDisplay
+  - denominations
+  - initial mode: "real" | "demo"
+  - demoAllowed: whether user may switch REAL/DEMO
+*/
+window.X2_GAME_CONFIG = {
+  gameId: 'CHUKO',
+
+  denomination: 100,
+  denominations: [25, 50, 100],
+
+  language: 'RU',
+
+  currency: 'KGS',
+  currencyDisplay: 'сом',
+
+  mode: 'real',
+  demoAllowed: true,
+  demoBalance: 10000,
+
+  // Demo package default.
+  // Production LMS: set false.
+  mock: true,
+
+  apiBase: '',
+  endpoints: {
+    balance: '/api/lms/player/balance',
+    newGame: '/api/lms/game/new'
+  },
+
+  initMode: 'postMessage',
+  sessionMode: 'postMessage',
+
+  sessionQueryParam: 'session',
+  sessionHeader: 'X-Session-ID',
+
+  parentOrigin: '*',
+  allowedParentOrigins: ['*'],
+
+  requestTimeoutMs: 10000
+};
+
+</script>
+<script>
+(function (global) {
+  'use strict';
+
+  const cfg = global.X2_GAME_CONFIG || {};
+  const params = new URLSearchParams(global.location.search);
+
+  let session = params.get(cfg.sessionQueryParam || 'session') || null;
+  let sessionResolve = null;
+  let initResolve = null;
+  let runtimeInit = null;
+
+  let mockCounter = 0;
+  const mockBalances = {KGS:12450, RUB:50000, USD:150, EUR:140};
+
+  const sessionPromise = new Promise(resolve => {
+    sessionResolve = resolve;
+    if (session) resolve(session);
+  });
+
+  const initPromise = new Promise(resolve => {
+    initResolve = resolve;
+  });
+
+  function isAllowedOrigin(origin) {
+    const allowed = cfg.allowedParentOrigins || ['*'];
+    return allowed.includes('*') || allowed.includes(origin);
+  }
+
+  function targetOrigin() {
+    return cfg.parentOrigin && cfg.parentOrigin !== '*' ? cfg.parentOrigin : '*';
+  }
+
+  function emit(type, payload = {}) {
+    if (global.parent && global.parent !== global) {
+      global.parent.postMessage({
+        source:'X2_CHUKO',
+        type,
+        ...payload
+      }, targetOrigin());
+    }
+  }
+
+  function parseNumbers(value) {
+    if (Array.isArray(value)) return value.map(Number);
+    if (typeof value !== 'string') return null;
+    return value.split(',').map(x => Number(x.trim())).filter(Number.isFinite);
+  }
+
+  function querySettings() {
+    const denominations = parseNumbers(params.get('denominations'));
+
+    return {
+      gameId: params.get('gameId') || cfg.gameId || 'CHUKO',
+      denomination: Number(params.get('denomination') || cfg.denomination || 100),
+      denominations: denominations || cfg.denominations || [cfg.denomination || 100],
+      currency: String(params.get('currency') || cfg.currency || 'KGS').toUpperCase(),
+      currencyDisplay: params.get('currencyDisplay') || cfg.currencyDisplay || cfg.currency || 'KGS',
+      language: String(params.get('language') || cfg.language || 'RU').toUpperCase(),
+      mode: String(params.get('mode') || cfg.mode || 'real').toLowerCase(),
+      demoAllowed: String(params.get('demoAllowed') ?? cfg.demoAllowed).toLowerCase() === 'true',
+      demoBalance: Number(params.get('demoBalance') || cfg.demoBalance || 10000)
+    };
+  }
+
+  global.addEventListener('message', event => {
+    if (!isAllowedOrigin(event.origin)) return;
+    const data = event.data || {};
+
+    if (data.type === 'X2_LMS_INIT') {
+      runtimeInit = {
+        gameId: data.gameId || cfg.gameId || 'CHUKO',
+        denomination: data.denomination,
+        denominations: data.denominations,
+        currency: data.currency,
+        currencyDisplay:
+          data.currencyDisplay ||
+          data.currencyLabel ||
+          data.currencySymbol,
+        language: data.language,
+        mode: data.mode,
+        demoAllowed: data.demoAllowed,
+        demoBalance: data.demoBalance
+      };
+
+      if (data.session) {
+        session = String(data.session);
+        if (sessionResolve) sessionResolve(session);
+      }
+
+      if (initResolve) initResolve(runtimeInit);
+      return;
+    }
+
+    if (data.type === 'X2_LMS_SESSION' && data.session) {
+      session = String(data.session);
+      if (sessionResolve) sessionResolve(session);
+    }
+  });
+
+  function makeError(code, message, status) {
+    const err = new Error(message || code);
+    err.code = code;
+    err.status = status;
+    return err;
+  }
+
+  async function getGameSettings() {
+    if (cfg.mock || cfg.initMode === 'config' || global.parent === global) {
+      return querySettings();
+    }
+
+    if (runtimeInit) return {...querySettings(), ...runtimeInit};
+
+    emit('X2_GAME_READY', {
+      gameId: params.get('gameId') || cfg.gameId || 'CHUKO',
+      needsInit: true,
+      needsSession: cfg.sessionMode === 'postMessage'
+    });
+
+    const timeout = Number(cfg.requestTimeoutMs || 10000);
+
+    const supplied = await Promise.race([
+      initPromise,
+      new Promise((_, reject) => setTimeout(
+        () => reject(makeError('INIT_TIMEOUT', 'LMS did not send X2_LMS_INIT')),
+        timeout
+      ))
+    ]);
+
+    return {...querySettings(), ...supplied};
+  }
+
+  async function waitForSession() {
+    if (cfg.mock) return null;
+    if (cfg.sessionMode === 'cookie') return null;
+    if (session) return session;
+
+    if (cfg.sessionMode === 'query') {
+      throw makeError('SESSION_REQUIRED', 'Session query parameter is missing');
+    }
+
+    const timeout = Number(cfg.requestTimeoutMs || 10000);
+    return Promise.race([
+      sessionPromise,
+      new Promise((_, reject) => setTimeout(
+        () => reject(makeError('SESSION_TIMEOUT', 'LMS session was not provided by parent iframe')),
+        timeout
+      ))
+    ]);
+  }
+
+  async function apiRequest(path, options = {}) {
+    const sessionValue = await waitForSession();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Number(cfg.requestTimeoutMs || 10000));
+
+    const headers = {
+      Accept:'application/json',
+      ...(options.body ? {'Content-Type':'application/json'} : {}),
+      ...(options.headers || {})
+    };
+
+    if (sessionValue && cfg.sessionHeader) {
+      headers[cfg.sessionHeader] = sessionValue;
+    }
+
+    try {
+      const response = await fetch((cfg.apiBase || '') + path, {
+        ...options,
+        headers,
+        credentials:'include',
+        signal:controller.signal
+      });
+
+      let data = {};
+      try { data = await response.json(); } catch (_) {}
+
+      if (!response.ok) {
+        const code =
+          data.code ||
+          (response.status === 401 ? 'SESSION_EXPIRED' :
+           response.status === 409 ? 'INSUFFICIENT_FUNDS' :
+           'LMS_HTTP_' + response.status);
+
+        throw makeError(code, data.message || 'LMS request failed', response.status);
+      }
+
+      return data;
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw makeError('LMS_TIMEOUT', 'LMS request timed out');
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  function normalizeBalance(data, requestedCurrency) {
+    const balance = Number(data.balance ?? data.newBalance);
+
+    if (!Number.isFinite(balance)) {
+      throw makeError('BAD_BALANCE_RESPONSE', 'LMS balance response has no numeric balance');
+    }
+
+    return {
+      balance,
+      currency: String(data.currency || requestedCurrency || cfg.currency || 'KGS').toUpperCase(),
+      currencyDisplay:
+        data.currencyDisplay ||
+        data.currencyLabel ||
+        data.currencySymbol ||
+        cfg.currencyDisplay ||
+        requestedCurrency
+    };
+  }
+
+  function normalizeTicket(data, requested) {
+    const ticketId = data.ticketId ?? data.ticket_id ?? data.ticketNumber ?? data.ticket_number;
+    const scenario = Number(data.scenario ?? data.scenarioId ?? data.scenario_id);
+    const win = Number(data.win ?? data.prize ?? data.winAmount ?? 0);
+    const balance = Number(data.balance ?? data.newBalance ?? data.balanceAfterGame);
+    const denomination = Number(data.denomination ?? requested.denomination);
+    const currency = String(data.currency || requested.currency || cfg.currency || 'KGS').toUpperCase();
+
+    if (ticketId == null || ticketId === '') {
+      throw makeError('BAD_TICKET_RESPONSE', 'LMS response has no ticketId');
+    }
+    if (![1,2,3,4,5].includes(scenario)) {
+      throw makeError('BAD_SCENARIO_RESPONSE', 'Scenario must be 1..5');
+    }
+    if (!Number.isFinite(win) || win < 0) {
+      throw makeError('BAD_WIN_RESPONSE', 'LMS response has invalid win');
+    }
+    if (!Number.isFinite(balance)) {
+      throw makeError('BAD_BALANCE_RESPONSE', 'LMS ticket response has no numeric balance');
+    }
+
+    return {
+      ticketId:String(ticketId),
+      scenario,
+      win,
+      balance,
+      denomination,
+      currency,
+      currencyDisplay:
+        data.currencyDisplay ||
+        data.currencyLabel ||
+        data.currencySymbol ||
+        requested.currencyDisplay ||
+        cfg.currencyDisplay ||
+        currency,
+      language:requested.language,
+      multiplier:data.multiplier != null ? Number(data.multiplier) : null,
+      raw:data
+    };
+  }
+
+  async function getBalance({currency} = {}) {
+    const cur = String(currency || cfg
