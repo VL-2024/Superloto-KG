@@ -1,0 +1,2 @@
+/* X2 LOTO — Алтын Хан. Runtime defaults; LMS/URL init may override these values. */
+window.X2_GAME_CONFIG={gameId:'ALTYN_KHAN',gameNumericId:137,denomination:100,denominations:[25,50,100],language:'RU',currency:'KGS',currencyDisplay:'сом',mode:'real',demoAllowed:true,demoBalance:10000,mock:true,apiBase:'https://dev.superloto.kg/api/Lotto.Users.cls',methods:{payTicket:'PayTicket'},parentOrigin:'*',allowedParentOrigins:['*'],requestTimeoutMs:10000};

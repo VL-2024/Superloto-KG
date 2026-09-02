@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Алтын Хан — iframe host example</title>
+<style>
+  html,body{margin:0;background:#071c3b;color:#fff;font-family:Arial,sans-serif}
+  .wrap{max-width:520px;margin:24px auto;padding:0 16px}
+  iframe{display:block;width:100%;aspect-ratio:941/1672;border:0;border-radius:18px;background:#03152e}
+  pre{white-space:pre-wrap;background:#0a2b55;padding:12px;border-radius:12px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Алтын Хан — пример запуска</h1>
+  <iframe id="game" src="index.html?mode=demo&denomination=100&language=RU&currency=KGS&currencyDisplay=%D1%81%D0%BE%D0%BC&demoAllowed=true"></iframe>
+  <pre id="log">Ожидание событий игры…</pre>
+</div>
+<script>
+const frame=document.getElementById('game');
+const log=document.getElementById('log');
+window.addEventListener('message',(event)=>{
+  const d=event.data||{};
+  if(d.source!=='X2_GAME') return;
+  log.textContent=JSON.stringify(d,null,2);
+  if(d.type==='X2_GAME_READY'){
+    frame.contentWindow.postMessage({
+      type:'X2_LMS_INIT',
+      gameId:'ALTYN_KHAN',
+      gameNumericId:137,
+      denomination:100,
+      denominations:[25,50,100],
+      language:'RU',
+      currency:'KGS',
+      currencyDisplay:'сом',
+      mode:'demo',
+      demoAllowed:true,
+      balance:10000,
+      session:'DEMO-SESSION'
+    },'*');
+  }
+});
+</script>
+</body>
+</html>
