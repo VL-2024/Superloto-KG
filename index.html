@@ -3,28 +3,51 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>ЧҮКӨ v19</title>
+<title>ЧҮКӨ v20 LMS</title>
 <style>html,body{margin:0;min-height:100%;background:#041a41;color:#fff;font-family:system-ui}#s{padding:24px;text-align:center}</style>
 </head>
-<body><div id="s">Загрузка ЧҮКӨ v19…</div>
+<body><div id="s">Загрузка ЧҮКӨ…</div>
 <script>
 (async()=>{
   try{
-    const files=Array.from({length:8},(_,i)=>`v19final/part${String(i).padStart(2,'0')}.txt?v=19`);
+    const files=Array.from({length:8},(_,i)=>`v19final/part${String(i).padStart(2,'0')}.txt?v=20`);
     const parts=[];
     for(const file of files){
       const r=await fetch(file,{cache:'no-store'});
       if(!r.ok) throw new Error(file+' HTTP '+r.status);
       parts.push(await r.text());
     }
-    const html=parts.join('');
-    if(!html.includes('X2_GAME_DEPOSIT_REQUEST')||!html.includes('MODE_SWITCH')) throw new Error('v19 validation failed');
+
+    let html=parts.join('');
+    if(!html.includes('X2_GAME_DEPOSIT_REQUEST')||!html.includes('MODE_SWITCH')) {
+      throw new Error('game package validation failed');
+    }
+
+    // v19final contains its old inline config + adapter as the first two script blocks.
+    // Replace only those integration blocks with the current external LMS adapter.
+    const firstScript=html.indexOf('<script>');
+    if(firstScript<0) throw new Error('config script not found');
+
+    let cut=firstScript;
+    for(let i=0;i<2;i++){
+      const start=html.indexOf('<script>',cut);
+      const end=html.indexOf('</script>',start);
+      if(start<0||end<0) throw new Error('integration script block not found');
+      cut=end+'</script>'.length;
+    }
+
+    const externalIntegration =
+      '<script src="config.js?v=20"><\/script>' +
+      '<script src="lms-adapter.js?v=20"><\/script>';
+
+    html=html.slice(0,firstScript)+externalIntegration+html.slice(cut);
+
     document.open();
     document.write(html);
     document.close();
   }catch(e){
     console.error(e);
-    document.getElementById('s').textContent='Ошибка загрузки v19. Обновите страницу.';
+    document.getElementById('s').textContent='Ошибка загрузки игры. Обновите страницу.';
   }
 })();
 </script></body></html>
