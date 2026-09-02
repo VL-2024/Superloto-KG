@@ -10,7 +10,7 @@
 <script>
 (async()=>{
   try{
-    const files=Array.from({length:8},(_,i)=>`v19final/part${String(i).padStart(2,'0')}.txt?v=20`);
+    const files=Array.from({length:8},(_,i)=>`v19final/part${String(i).padStart(2,'0')}.txt?v=20.1`);
     const parts=[];
     for(const file of files){
       const r=await fetch(file,{cache:'no-store'});
@@ -23,22 +23,22 @@
       throw new Error('game package validation failed');
     }
 
-    // v19final contains its old inline config + adapter as the first two script blocks.
-    // Replace only those integration blocks with the current external LMS adapter.
-    const firstScript=html.indexOf('<script>');
+    const openTag='<script>';
+    const closeTag='<'+'/script>';
+    const firstScript=html.indexOf(openTag);
     if(firstScript<0) throw new Error('config script not found');
 
     let cut=firstScript;
     for(let i=0;i<2;i++){
-      const start=html.indexOf('<script>',cut);
-      const end=html.indexOf('</script>',start);
+      const start=html.indexOf(openTag,cut);
+      const end=html.indexOf(closeTag,start);
       if(start<0||end<0) throw new Error('integration script block not found');
-      cut=end+'</script>'.length;
+      cut=end+closeTag.length;
     }
 
     const externalIntegration =
-      '<script src="config.js?v=20"><\/script>' +
-      '<script src="lms-adapter.js?v=20"><\/script>';
+      '<script src="config.js?v=20.1"></'+'script>' +
+      '<script src="lms-adapter.js?v=20.1"></'+'script>';
 
     html=html.slice(0,firstScript)+externalIntegration+html.slice(cut);
 
