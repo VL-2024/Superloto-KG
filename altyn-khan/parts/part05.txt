@@ -1,0 +1,84 @@
+(${rot+18}deg) scale(${scale*1.1})`,offset:.50},{transform:`translate(calc(-50% + ${nearDx}px - 4px),calc(-50% + ${nearDy}px + 1px)) rotate(${rot-11}deg) scale(${scale*1.08})`,offset:.60},{transform:`translate(calc(-50% + ${nearDx}px),calc(-50% + ${nearDy}px)) rotate(${rot+15}deg) scale(${scale*1.1})`,offset:.72},{transform:`translate(calc(-50% + ${endDx}px),calc(-50% + ${endDy}px)) rotate(${rot+420}deg) scale(1.12)`,offset:1}],{duration:dur,easing:'cubic-bezier(.18,.76,.22,1)',fill:'forwards'});el._eject=a;setTimeout(()=>{const q=fxPointFromElement(el);spawnFx(q.x,q.y,true,20)},900);a.onfinish=()=>{const end=`translate(calc(-50% + ${endDx}px),calc(-50% + ${endDy}px)) rotate(${rot+420}deg) scale(1.12)`;el.style.transform=end;try{a.cancel()}catch(_){ }el._eject=null;const q=fxPointFromElement(el);impactFx(q.x,q.y,true,24)}}else{scatterPiece(el,1,true,0)}},delay);return delay+dur}
+async function newGame(){if(!['idle','done'].includes(state))return;state='loading';throwNo=0;ticket=null;updateThrows();$('actionBtn').disabled=true;$('actionBtn').textContent=T.loading;$('arena').innerHTML='';pieceNodes=[];knockedIds=new Set();resetSaka();initRoundRows();try{ticket=await X2LMS.createTicket({gameId:cfg.gameId,gameNumericId:Number(settings.gameNumericId||cfg.gameNumericId),denomination:stake,currency,language:lang,mode});ticket.scenario=Number(ticket.scenario);if(!SCENARIOS[ticket.scenario])throw Object.assign(new Error('INVALID_SCENARIO'),{code:'INVALID_SCENARIO'});ticket.visualPlan=buildVisualPlan(ticket.ticketId,ticket.scenario);buildBoard(ticket.ticketId,ticket.scenario);balance=Number(ticket.balance);$('balanceValue').textContent=money(balance);state='ready';$('actionBtn').disabled=false;$('actionBtn').textContent=T.throw;setResult('—',false);updateThrows();X2LMS.emit('X2_GAME_TICKET_READY',{gameId:cfg.gameId,ticketId:ticket.ticketId,scenario:ticket.scenario,win:Number(ticket.win||0),balance,denomination:stake,currency,language:lang,mode})}catch(e){state='idle';$('actionBtn').disabled=false;$('actionBtn').textContent=T.newGame;toast(T.error,e.code==='INSUFFICIENT_FUNDS'?T.funds:(e.code||e.message))}}function chooseImpactTarget(outcomeData,ux,uy){
+ const regular=freeRegularPieces();
+ const pool=outcomeData.khan?[pieceNodes[khanId]].filter(Boolean):regular;
+ if(!pool.length)return null;
+ const appRect=$('app').getBoundingClientRect(),arenaRect=$('arena').getBoundingClientRect();
+ const cx=arenaRect.left-appRect.left+arenaRect.width/2,cy=arenaRect.top-appRect.top+arenaRect.height/2;
+ let best=pool[0],bestScore=1e9;
+ for(const el of pool){
+   const r=el.getBoundingClientRect(),px=r.left-appRect.left+r.width/2,py=r.top-appRect.top+r.height/2;
+   const along=(px-cx)*ux+(py-cy)*uy;
+   const side=Math.abs((px-cx)*(-uy)+(py-cy)*ux);
+   const radial=Math.abs(Math.hypot(px-cx,py-cy)-arenaRect.width*.16);
+   const score=-along+side*.55+radial*.18+rand(0,12);
+   if(score<bestScore){bestScore=score;best=el}
+ }
+ return best
+}
+function pieceCenterInApp(el){
+ const appRect=$('app').getBoundingClientRect(),r=el.getBoundingClientRect();
+ return {x:r.left-appRect.left+r.width/2,y:r.top-appRect.top+r.height/2,w:r.width,h:r.height}
+}
+function outcome(){return(ticket?.visualPlan||[])[throwNo]||{throwNo:throwNo+1,khan:false,knocked:0,finalMultiplier:null}}function animateThrowVector(ux,uy,pwr,startTx=0,startTy=0){
+ if(state!=='ready'||!ticket||throwNo>=3)return;
+ const L=Math.hypot(ux,uy)||1;ux/=L;uy/=L;
+ currentThrowPower=clamp(pwr,.18,1);currentAimX=clamp(ux,-1,1);
+ state='animating';$('actionBtn').disabled=true;hideDragGuide();soundRelease(currentThrowPower);
+ const o=outcome(),s=$('saka'),app=$('app'),arena=$('arena'),
+       appRect=app.getBoundingClientRect(),arenaRect=arena.getBoundingClientRect(),
+       homeCx=s.offsetLeft+s.offsetWidth/2,homeCy=s.offsetTop+s.offsetHeight/2,
+       sx=startTx,sy=startTy,
+       targetEl=chooseImpactTarget(o,ux,uy),
+       target=targetEl?pieceCenterInApp(targetEl):{x:arenaRect.left-appRect.left+arenaRect.width/2+ux*arenaRect.width*.11,y:arenaRect.top-appRect.top+arenaRect.height/2+uy*arenaRect.width*.08,w:arenaRect.width*.08,h:arenaRect.width*.08};
+ let endX=target.x-homeCx+ux*rand(-target.w*.10,target.w*.10)+(-uy)*rand(-target.w*.04,target.w*.04),
+     endY=target.y-homeCy+uy*rand(-target.h*.10,target.h*.10)+(ux)*rand(-target.h*.04,target.h*.04);
+ const ex=endX,ey=endY,
+       c1x=sx+ux*arenaRect.width*.02,
+       c1y=sy-arenaRect.width*(.15+currentThrowPower*.02),
+       c2x=(sx+ex)/2+ux*arenaRect.width*.07,
+       c2y=Math.min(sy,ey)-arenaRect.width*(.34+currentThrowPower*.04),
+       dur=Math.round(900+currentThrowPower*160),
+       spinDir=ux>=0?1:-1,
+       spin=spinDir*(560+currentThrowPower*260+throwNo*80);
+ currentImpactX=homeCx+ex;currentImpactY=homeCy+ey;
+ const ts=[0,.18,.38,.62,.82,1], keyframes=ts.map(t=>{
+   const x=cubicCoord(t,sx,c1x,c2x,ex),y=cubicCoord(t,sy,c1y,c2y,ey);
+   const lift=Math.sin(t*Math.PI)*(arenaRect.width*(.092+currentThrowPower*.052));
+   const sc=1+Math.sin(t*Math.PI)*(.14+currentThrowPower*.05);
+   return {offset:t,transform:`translate(${x}px,${y-lift}px) rotate(${spin*t}deg) scale(${sc})`,filter:`drop-shadow(0 ${Math.round(10+18*Math.sin(t*Math.PI))}px ${Math.round(8+8*Math.sin(t*Math.PI))}px rgba(0,0,0,${(.56-.22*Math.sin(t*Math.PI)).toFixed(2)}))`}
+ });
+ try{(s.getAnimations?s.getAnimations():[]).forEach(a=>a.cancel())}catch(_){ }
+ s.style.transition='none';
+ const flight=s.animate?s.animate(keyframes,{duration:dur,easing:'cubic-bezier(.18,.76,.22,1)',fill:'forwards'}):null;
+ s._flight=flight;
+ const rollDist=arenaRect.width*(.025+currentThrowPower*.045),
+       sideDrift=arenaRect.width*rand(-.018,.018),
+       tx=-uy,ty=ux,
+       rollX=ex+ux*rollDist+tx*sideDrift,
+       rollY=ey+uy*rollDist+ty*sideDrift,
+       rollDur=Math.round(240+currentThrowPower*120),
+       rollSpin=spin+spinDir*(120+currentThrowPower*110);
+ function triggerKnock(){
+   soundImpact(currentThrowPower);impactFx(currentImpactX,currentImpactY,false,24);
+   const regular=freeRegularPieces().slice().sort((a,b)=>hitScore(a)-hitScore(b)),
+         count=Math.min(Number(o.knocked||0),regular.length);
+   let maxEnd=0;
+   for(let i=0;i<count;i++){
+     const el=regular[i],endAt=knockPiece(el,Number(el.dataset.id),i,i*30);
+     maxEnd=Math.max(maxEnd,endAt)
+   }
+   if(o.khan)maxEnd=Math.max(maxEnd,knockKhan(0));
+   s._visualSettle=Math.max(720,maxEnd+100)
+ }
+ function startRoll(){
+   currentImpactX=homeCx+ex;currentImpactY=homeCy+ey;
+   triggerKnock();
+   const rollFrames=[
+     {transform:`translate(${ex}px,${ey}px) rotate(${spin}deg) scale(1)`,offset:0},
+     {transform:`translate(${ex+(rollX-ex)*.55}px,${ey+(rollY-ey)*.55}px) rotate(${spin+(rollSpin-spin)*.55}deg) scale(.99)`,offset:.55},
+     {transform:`translate(${rollX}px,${rollY}px) rotate(${rollSpin}deg) scale(.98)`,offset:1}
+   ];
+   const roll=s.animate?s.animate(rollFrames,{duration:rollDur,easing:'cubic-bezier(.20,.62,.28,1)',fill:'forwards'}):null;
+   s._flight=roll;
+   if(roll)roll.on

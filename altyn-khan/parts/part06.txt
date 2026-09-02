@@ -1,0 +1,61 @@
+finish=()=>{
+     const end=`translate(${rollX}px,${rollY}px) rotate(${rollSpin}deg) scale(.98)`;
+     s.style.transform=end;try{roll.cancel()}catch(_){}s._flight=null
+   }
+ }
+ if(flight){flight.onfinish=()=>{
+   s.style.transform=`translate(${ex}px,${ey}px) rotate(${spin}deg) scale(1)`;
+   try{flight.cancel()}catch(_){}s._flight=null;startRoll()
+ }}else{setTimeout(startRoll,dur)}
+ const baseSettle=o.khan?2350:Math.max(1320,980+Number(o.knocked||0)*92);
+ setTimeout(()=>{
+   throwNo++;
+   if(o.khan){
+     const km=SCENARIOS[ticket.scenario].multiplier;
+     toast(T.khan,`Бросок ${throwNo} · ×${formatMult(km)}`);
+     setRoundRow(throwNo,`ХАН ×${formatMult(km)}`,true);updateThrows();finishRound(true);return
+   }
+   const meta=SCENARIOS[ticket.scenario],isLast=throwNo>=3;
+   if(isLast&&meta.multiplier>0){toast('МНОЖИТЕЛЬ',`×${formatMult(meta.multiplier)}`);setRoundRow(throwNo,`${o.knocked||0} чүкө · ×${formatMult(meta.multiplier)}`,true)}
+   else setRoundRow(throwNo,`${o.knocked||0} чүкө`,false);
+   updateThrows();
+   if(throwNo>=3)finishRound(false);
+   else{state='ready';$('actionBtn').disabled=false;$('actionBtn').textContent=T.next;setTimeout(()=>{resetSaka(true)},170)}
+ },dur+rollDur+baseSettle)
+}
+function animateThrow(force=null,aimX=0){
+ const side=clamp(aimX,-1,1)*.34,ux=Math.sin(side),uy=-Math.cos(side);
+ animateThrowVector(ux,uy,force==null?.82:force,0,0)
+}
+function finishRound(khanHit){state='done';updateThrows();const win=Number(ticket.win||0);setTimeout(()=>{resetSaka(true)},220);setTimeout(()=>{setResult(win>0?money(win):T.noWin,win>0);soundResult(win);if(!khanHit&&win>0)toast(T.win,money(win));$('actionBtn').disabled=false;$('actionBtn').textContent=T.newGame},620);X2LMS.emit('X2_GAME_ROUND_COMPLETE',{gameId:cfg.gameId,ticketId:ticket.ticketId,scenario:ticket.scenario,win,balance,denomination:stake,currency,language:lang,mode})}$('actionBtn').onclick=()=>{ensureAudio();if(state==='ready'){const side=rand(-.22,.22),ux=Math.sin(side),uy=-Math.cos(side);animateThrowVector(ux,uy,rand(.80,.97),0,0)}else newGame()};$('depositBtn').onclick=()=>X2LMS.emit('X2_GAME_DEPOSIT_REQUEST',{gameId:cfg.gameId,mode,currency,denomination:stake,language:lang,balance});$('helpBtn').onclick=()=>$('helpModal').classList.add('show');$('closeHelp').onclick=()=>$('helpModal').classList.remove('show');$('helpModal').onclick=e=>{if(e.target===$('helpModal'))$('helpModal').classList.remove('show')};$('modeBtn').onclick=async()=>{if(!settings.demoAllowed||!['idle','done'].includes(state))return;mode=mode==='real'?'demo':'real';$('modeBtn').textContent=mode.toUpperCase();X2LMS.emit('X2_GAME_MODE_CHANGED',{gameId:cfg.gameId,mode,currency,language:lang,denomination:stake});await refreshBalance()};if(!settings.demoAllowed)$('modeBtn').style.display='none';const saka=$('saka');
+saka.addEventListener('pointerdown',e=>{
+ ensureAudio();if(state!=='ready')return;
+ const rect=saka.getBoundingClientRect();dragged=true;dragStartY=e.clientY;dragStartX=e.clientX;
+ pointerDownY=e.clientY;pointerDownX=e.clientX;pointerLocalY=(e.clientY-rect.top)/Math.max(1,rect.height);
+ pointerLocalX=(e.clientX-rect.left)/Math.max(1,rect.width);dragY=0;dragX=0;
+ saka.setPointerCapture(e.pointerId);saka.classList.add('grab');saka.style.transition='none'
+});
+saka.addEventListener('pointermove',e=>{
+ if(!dragged||state!=='ready')return;
+ let dx=e.clientX-dragStartX,dy=e.clientY-dragStartY;
+ const appW=$('app').getBoundingClientRect().width,pullMax=Math.min(maxPull,appW*.12),len=Math.hypot(dx,dy);
+ if(len>pullMax){dx=dx/len*pullMax;dy=dy/len*pullMax}
+ dy=clamp(dy,-pullMax*.66,pullMax*.62);dx=clamp(dx,-pullMax,pullMax);
+ dragX=dx;dragY=dy;
+ const pull=Math.min(1,Math.hypot(dx,dy)/pullMax),rotate=dx*.42;
+ saka.style.transform=`translate(${dx}px,${dy}px) rotate(${rotate}deg) scale(${1+.025*pull})`;
+ const L=Math.hypot(dx,dy)||1,ux=-dx/L,uy=-dy/L;
+ updateDragGuideFromVector(ux,uy,pull)
+});
+saka.addEventListener('pointerup',e=>{
+ if(!dragged)return;dragged=false;saka.classList.remove('grab');
+ const appW=$('app').getBoundingClientRect().width,pullMax=Math.min(maxPull,appW*.12),
+       len=Math.hypot(dragX,dragY);
+ if(len<8){const aim=clamp((pointerLocalX-.5)*1.45,-1,1),ang=aim*.38,ux=Math.sin(ang),uy=-Math.cos(ang),power=clamp(.45+.35*pointerLocalY,.28,.92);animateThrowVector(ux,uy,power,0,0);return}
+ const ux=-dragX/len,uy=-dragY/len,power=Math.min(1,len/pullMax);
+ animateThrowVector(ux,uy,power,dragX,dragY)
+});
+saka.addEventListener('pointercancel',()=>{dragged=false;saka.classList.remove('grab');hideDragGuide();resetSaka()});$('balanceLabel').textContent=T.balance;$('modeBtn').textContent=mode.toUpperCase();$('actionBtn').textContent=T.newGame;renderStakeMenu();buildBoard('PREVIEW-'+Date.now(),1);resetSaka();updateThrows();initRoundRows();await refreshBalance()})();
+</script>
+</body>
+</html>

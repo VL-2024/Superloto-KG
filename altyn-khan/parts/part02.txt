@@ -1,0 +1,73 @@
+50}.stakeMenu button.on{background:var(--lime);color:#15304e}
+@keyframes khanPulse{0%,100%{filter:drop-shadow(0 0 9px rgba(255,196,47,.5)) drop-shadow(0 8px 7px rgba(0,0,0,.45))}50%{filter:drop-shadow(0 0 25px rgba(255,214,86,1)) drop-shadow(0 8px 7px rgba(0,0,0,.45))}}
+@media(max-width:430px){.header{gap:1.2%}.headerCard{padding:0 8px;border-radius:17px}.deposit{width:30px;height:30px;font-size:23px;line-height:28px}.rules{width:25%}.sideHelp{width:11.5%;right:2.8%}.nominalChip{min-width:42px;height:28px;padding:0 11px}.roundPanel{bottom:15.2%;height:12.8%}.dragHint{bottom:28%}}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+<header class="header"><div class="brand"><span class="x2">X2</span><span class="loto">LOTO</span><span class="gameHeaderTitle">АЛТЫН ХАН</span></div><div class="headerCard balanceCard"><span class="ico">▣</span><div><small id="balanceLabel">Баланс</small><strong id="balanceValue">—</strong></div><button class="deposit" id="depositBtn">+</button></div></header>
+<button class="modeBtn" id="modeBtn">REAL</button>
+<section class="title" aria-hidden="true"></section>
+<div class="topTables">
+  <div class="infoTable" id="payoutTable">
+    <h3>ВЫПЛАТЫ</h3>
+    <div class="payoutCompact">
+      <div class="payoutItem zero"><span>1–3</span><b>×0</b></div>
+      <div class="payoutItem"><span>4</span><b>×0,5</b></div>
+      <div class="payoutItem"><span>5</span><b>×1</b></div>
+      <div class="payoutItem"><span>6</span><b>×3</b></div>
+      <div class="payoutItem"><span>7</span><b>×4</b></div>
+      <div class="payoutItem"><span>8</span><b>×5</b></div>
+    </div>
+    <div class="payoutFoot"><span>ХАН</span><span>1-й <strong>×20</strong></span><span>2-й <strong>×15</strong></span><span>3-й <strong>×10</strong></span></div>
+  </div>
+</div>
+<div class="arena" id="arena"></div>
+<div class="saka" id="saka"><img id="sakaImg" src="assets/saka-1.webp" alt="САКА"></div>
+<button class="sideHelp" id="helpBtn"><b>?</b><span>Как играть</span></button>
+<div class="dragHint" id="dragHint" aria-hidden="true"></div>
+
+<div class="bottomStats" id="bottomStats">
+  <div class="statCard"><div class="statLabel">БРОСКИ</div><div class="statValue" id="throwsValue">0 / 3</div></div>
+  <div class="statCard"><div class="statLabel">ВЫБИТО</div><div class="statValue" id="knockedValue">0 чүкө</div></div>
+  <div class="statCard"><div class="statLabel">ХАН</div><div class="statValue small" id="khanValue">УСТОЯЛ</div></div>
+</div>
+
+<div class="resultBox" id="resultBox">
+  <div class="resultCaption">ИТОГ</div>
+  <div class="resultValue" id="resultValue">—</div>
+</div>
+<div class="nominalWrap">
+  <span>НОМИНАЛ</span>
+  <div class="nominalBar" id="nominalBar"></div>
+</div>
+<button class="action" id="actionBtn">НОВАЯ ИГРА</button>
+<div class="fxLayer" id="fxLayer"></div>
+<div class="toast" id="toast"><strong id="toastTitle"></strong><span id="toastText"></span></div>
+<div class="stakeMenu" id="stakeMenu"></div>
+<div class="modal" id="helpModal"><div class="modalCard"><h2>Как играть</h2><p>Среди обычных чүкө находится АЛТЫН ХАН. Один билет даёт до трёх бросков САКА. Оттяните САКА назад и в сторону или просто тапните по нему. Чем дальше оттяжка, тем сильнее бросок, а направление полёта будет противоположно оттяжке. Каждый бросок может выбить обычные чүкө, открыть множитель или выбить ХАНА.</p><p><b>АЛТЫН ХАН:</b> 1-й бросок — ×20, 2-й — ×15, 3-й — ×10. Если ХАН выбит, раунд сразу заканчивается.</p><button id="closeHelp">ПОНЯТНО</button></div></div>
+</div>
+<script src="config.js"></script>
+<script src="lms-adapter.js"></script>
+<script>
+(async function(){const $=id=>document.getElementById(id),cfg=window.X2_GAME_CONFIG,A={chuko:Array.from({length:6},(_,i)=>`assets/chuko-${i+1}.webp`),saka:Array.from({length:6},(_,i)=>`assets/saka-${i+1}.webp`),khan:Array.from({length:6},(_,i)=>`assets/khan-${i+1}.webp`)},I18N={RU:{balance:'Баланс',stake:'Ставка',newGame:'НОВАЯ ИГРА',throw:'БРОСИТЬ САКА',next:'ЕЩЁ БРОСОК',loading:'ЗАГРУЗКА…',ready:'Бросок {n} из 3',noWin:'БЕЗ ВЫИГРЫША',win:'ВЫИГРЫШ',khan:'АЛТЫН ХАН!',knocked:'Выбито чүкө: {n}',mult:'Открыт множитель ×{n}',miss:'ХАН устоял',error:'Ошибка запуска игры',funds:'Недостаточно средств'},KG:{balance:'Баланс',stake:'Номинал',newGame:'ЖАҢЫ ОЮН',throw:'САКА ЫРГЫТ',next:'ДАГЫ ЫРГЫТ',loading:'ЖҮКТӨЛҮҮДӨ…',ready:'{n}/3 ыргытуу',noWin:'УТУШ ЖОК',win:'УТУШ',khan:'АЛТЫН ХАН!',knocked:'Кулатылган чүкө: {n}',mult:'×{n} көбөйткүч ачылды',miss:'ХАН калды',error:'Оюн башталган жок',funds:'Каражат жетишсиз'}};let settings=await X2LMS.getGameSettings(),lang=String(settings.language||'RU').toUpperCase()==='KG'?'KG':'RU',T=I18N[lang],currency=settings.currency||'KGS',cur=settings.currencyDisplay||currency,denominations=(settings.denominations||[25,50,100]).map(Number),stake=Number(settings.denomination||denominations[0]);if(!denominations.includes(stake))stake=denominations[0];let mode=settings.mode==='demo'?'demo':'real',balance=0,ticket=null,state='idle',throwNo=0,pieceNodes=[],knockedIds=new Set(),khanId=0,dragged=false,dragStartY=0,dragStartX=0,dragY=0,dragX=0,pointerDownY=0,pointerDownX=0,pointerLocalY=.5,pointerLocalX=.5,currentThrowPower=.58,currentAimX=0,maxPull=72,currentImpactX=null,currentImpactY=null;function txt(s,vars={}){return Object.entries(vars).reduce((a,[k,v])=>a.replaceAll(`{${k}}`,v),s)}function money(n){return Number(n||0).toLocaleString('ru-RU')+' '+cur}
+function setRoundHint(text){}
+function initRoundRows(){if($('throwsValue'))$('throwsValue').textContent='0 / 3';if($('knockedValue')){$('knockedValue').textContent='0 чүкө';$('knockedValue').className='statValue'}if($('khanValue')){$('khanValue').textContent='УСТОЯЛ';$('khanValue').className='statValue small'}$('resultValue').textContent='—';$('resultValue').classList.add('dim')}
+function setRoundRow(n,text,gold=false){}
+function setResult(text,gold=true){$('resultValue').textContent=text;$('resultValue').classList.toggle('dim',!gold)}
+function setMultiplier(text,gold=true){}
+function hideDragGuide(){const g=$('dragHint');if(!g)return;g.classList.remove('show');g.style.width='0px'}
+function updateDragGuideFromVector(ux,uy,power){
+ const g=$('dragHint'),app=$('app'),arena=$('arena'),s=$('saka');
+ if(!g||!app||!arena||!s)return;
+ const appRect=app.getBoundingClientRect(),arenaRect=arena.getBoundingClientRect();
+ const homeX=s.offsetLeft+s.offsetWidth/2,homeY=s.offsetTop+s.offsetHeight/2;
+ const targetX=arenaRect.left-appRect.left+arenaRect.width/2+ux*arenaRect.width*.22;
+ const targetY=arenaRect.top-appRect.top+arenaRect.height/2+uy*arenaRect.width*.20;
+ const dx=targetX-homeX,dy=targetY-homeY,len=Math.hypot(dx,dy),ang=Math.atan2(dy,dx)*180/Math.PI;
+ g.style.left=homeX+'px';g.style.top=homeY+'px';g.style.width=Math.max(18,len)+'px';
+ g.style.transform=`rotate(${ang}deg)`;g.classList.add('show')
+}
+function toast(title,text){$('toastTitle').textContent=title;$('toastText').textContent=text;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),1700)}
+let audioCtx=null;
+f
